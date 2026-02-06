@@ -1,0 +1,8 @@
+pdfplumber
+pydantic
+python-dateutil
+openpyxl
+fastapi
+uvicorn
+jinja2
+python-multipart

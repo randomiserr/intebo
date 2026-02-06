@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plan {{ plan_key }} - {{ timestamp }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; color: #1f2933; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #d9e2ec; padding: 0.5rem; text-align: left; }
+    th { background: #f5f7fa; }
+    .missing { color: #b91c1c; font-weight: bold; }
+    .warning { background: #fff3cd; padding: 0.5rem; border-radius: 6px; }
+    .actions { margin-top: 1rem; }
+    .badge { background: #e1e8ff; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>Plan {{ plan_key }} <span class="badge">{{ timestamp }}</span></h1>
+  {% if approved_at %}
+    <p><strong>Approved version exists:</strong> {{ approved_at }}</p>
+  {% endif %}
+
+  <h2>Summary</h2>
+  <table>
+    <tr><th>Receiving factory</th><td>{{ payload.receiving_factory }}</td></tr>
+    <tr><th>Warehouse rampe</th><td>{{ payload.warehouse_rampe }}</td></tr>
+    <tr><th>Material No.</th><td>{{ payload.material_no }}</td></tr>
+    <tr><th>Pal.Typ</th><td>{{ payload.pal_typ }}</td></tr>
+    <tr><th>Volume</th><td>{{ payload.volume_value }} {{ payload.volume_unit }}</td></tr>
+    <tr><th>Release Nr.</th><td>{{ payload.release_nr }}</td></tr>
+  </table>
+
+  {% if payload.missing_fields %}
+    <p class="missing">Missing fields: {{ payload.missing_fields | join(', ') }}</p>
+  {% endif %}
+
+  {% if payload.warnings %}
+    <div class="warning">
+      <strong>Warnings:</strong> {{ payload.warnings | join(', ') }}
+    </div>
+  {% endif %}
+
+  <h2>Schedule (first 50 rows)</h2>
+  <table>
+    <tr>
+      <th>Delivery date</th>
+      <th>Order Quantity</th>
+      <th>Modification</th>
+    </tr>
+    {% for line in payload.lines[:50] %}
+      <tr>
+        <td>{{ line.delivery_date }}</td>
+        <td>{{ line.order_quantity }}</td>
+        <td>{{ line.modification }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+
+  <div class="actions">
+    <form action="/plan/{{ plan_key }}/{{ timestamp }}/approve" method="post">
+      <button type="submit">Approve &amp; Generate XLSX</button>
+    </form>
+    <p><a href="/plan/{{ plan_key }}/download">Download XLSX</a></p>
+    <p><a href="/">Back to home</a></p>
+  </div>
+</body>
+</html>
