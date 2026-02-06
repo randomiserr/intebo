@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lieferplan Intebo Parser (Local)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; color: #1f2933; }
+    h1 { margin-bottom: 0.5rem; }
+    .card { border: 1px solid #d9e2ec; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
+    .plan-list { list-style: none; padding: 0; }
+    .plan-list li { margin-bottom: 0.5rem; }
+    .badge { background: #e1e8ff; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>Lieferplan Intebo Parser (Local)</h1>
+  <div class="card">
+    <h2>Upload PDF</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept="application/pdf" required />
+      <button type="submit">Upload</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Recent Plans</h2>
+    {% if plans %}
+      <ul class="plan-list">
+        {% for plan in plans %}
+          <li>
+            <span class="badge">{{ plan.plan_key }}</span>
+            <a href="/plan/{{ plan.plan_key }}/latest">Open latest</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No plans yet. Upload a PDF to get started.</p>
+    {% endif %}
+  </div>
+</body>
+</html>
