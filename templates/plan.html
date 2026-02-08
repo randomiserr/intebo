@@ -1,68 +1,211 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="cs">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Plan {{ plan_key }} - {{ timestamp }}</title>
+  <title>Detail Plánu {{ plan_key }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; color: #1f2933; }
-    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #d9e2ec; padding: 0.5rem; text-align: left; }
-    th { background: #f5f7fa; }
-    .missing { color: #b91c1c; font-weight: bold; }
-    .warning { background: #fff3cd; padding: 0.5rem; border-radius: 6px; }
-    .actions { margin-top: 1rem; }
-    .badge { background: #e1e8ff; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.8rem; }
+    .group-divider {
+      border-bottom: 2px solid var(--border);
+      margin: 0.75rem 0;
+    }
+
+    .history-item {
+      padding: 0.75rem;
+      border-left: 3px solid var(--primary);
+      background: #f8f9fa;
+      margin-bottom: 0.4rem;
+      font-size: 0.85rem;
+    }
+
+    .summary-table th {
+      background: #f8f9fa;
+      width: 35%;
+      padding: 0.4rem;
+      font-size: 0.9rem;
+      text-align: left;
+    }
+
+    .summary-table td {
+      padding: 0.4rem;
+      font-size: 0.9rem;
+    }
+
+    .missing {
+      color: #d32f2f;
+      font-weight: 600;
+      font-style: italic;
+    }
+
+    .compact-text {
+      font-size: 0.85rem;
+    }
+
+    .btn-sm {
+      padding: 0.4rem 0.8rem;
+      font-size: 0.85rem;
+    }
+
+    .urgent-row {
+      background-color: #fff5f5 !important;
+      border-left: 4px solid #d32f2f !important;
+    }
+
+    .past-row {
+      background-color: #fafafa !important;
+      opacity: 0.6;
+      color: #888;
+      border-left: 4px solid #ccc !important;
+    }
+
+    .past-row .date-text {
+      font-weight: 400 !important;
+    }
+
+    .date-text {
+      font-family: inherit;
+      font-weight: 400;
+    }
+
+    .urgent-row .date-text {
+      font-weight: 600;
+    }
   </style>
 </head>
+{% macro display_val(val) -%}
+{% if val %}{{ val }}{% else %}<span class="missing">Chybí</span>{% endif %}
+{%- endmacro %}
+
 <body>
-  <h1>Plan {{ plan_key }} <span class="badge">{{ timestamp }}</span></h1>
-  {% if approved_at %}
-    <p><strong>Approved version exists:</strong> {{ approved_at }}</p>
-  {% endif %}
-
-  <h2>Summary</h2>
-  <table>
-    <tr><th>Receiving factory</th><td>{{ payload.receiving_factory }}</td></tr>
-    <tr><th>Warehouse rampe</th><td>{{ payload.warehouse_rampe }}</td></tr>
-    <tr><th>Material No.</th><td>{{ payload.material_no }}</td></tr>
-    <tr><th>Pal.Typ</th><td>{{ payload.pal_typ }}</td></tr>
-    <tr><th>Volume</th><td>{{ payload.volume_value }} {{ payload.volume_unit }}</td></tr>
-    <tr><th>Release Nr.</th><td>{{ payload.release_nr }}</td></tr>
-  </table>
-
-  {% if payload.missing_fields %}
-    <p class="missing">Missing fields: {{ payload.missing_fields | join(', ') }}</p>
-  {% endif %}
-
-  {% if payload.warnings %}
-    <div class="warning">
-      <strong>Warnings:</strong> {{ payload.warnings | join(', ') }}
+  <div class="container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+      <h1 style="font-size: 1.5rem;">Plán: {{ plan_key }}</h1>
+      <a href="/" class="nav-link">← Zpět na přehled</a>
     </div>
-  {% endif %}
 
-  <h2>Schedule (first 50 rows)</h2>
-  <table>
-    <tr>
-      <th>Delivery date</th>
-      <th>Order Quantity</th>
-      <th>Modification</th>
-    </tr>
-    {% for line in payload.lines[:50] %}
-      <tr>
-        <td>{{ line.delivery_date }}</td>
-        <td>{{ line.order_quantity }}</td>
-        <td>{{ line.modification }}</td>
-      </tr>
-    {% endfor %}
-  </table>
+    {% if success %}
+    <div class="alert alert-success" style="padding: 0.75rem; margin-bottom: 1.5rem;">✨ Plán byl schválen a XLSX
+      vygenerován!</div>
+    <script>
+      window.onload = function () { window.location.href = "/plan/{{ plan_key }}/download"; };
+    </script>
+    {% endif %}
 
-  <div class="actions">
-    <form action="/plan/{{ plan_key }}/{{ timestamp }}/approve" method="post">
-      <button type="submit">Approve &amp; Generate XLSX</button>
-    </form>
-    <p><a href="/plan/{{ plan_key }}/download">Download XLSX</a></p>
-    <p><a href="/">Back to home</a></p>
+    <div class="card" style="padding: 1rem; margin-bottom: 1.5rem;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <h2 style="margin: 0; font-size: 1.25rem;">Souhrn informací</h2>
+        <div style="text-align: right;">
+          {% if approved_at %}
+          <div style="display: inline-block;">
+            <a href="/plan/{{ plan_key }}/download" class="btn btn-primary btn-sm">Stáhnout XLSX</a>
+            <span style="font-size: 0.7rem; color: var(--text-light); display: block; margin-top: 0.4rem;">Exportováno:
+              {{ approved_at }}</span>
+          </div>
+          {% else %}
+          <form action="/plan/{{ plan_key }}/{{ timestamp }}/approve" method="post">
+            <button type="submit" class="btn btn-primary btn-sm">Exportovat a stáhnout</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <div style="margin-top: 1rem;">
+        <table class="summary-table" style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <th>Lieferplan/SA</th>
+            <td><strong>{{ display_val(payload.scheduling_agreement_no) }}</strong></td>
+          </tr>
+          <tr>
+            <th>Změnovka (Release)</th>
+            <td>{{ display_val(payload.release_nr) }}</td>
+          </tr>
+        </table>
+        <div class="group-divider"></div>
+        <table class="summary-table" style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <th>Dodací Adresa</th>
+            <td class="compact-text" style="white-space: pre-line;">{{ display_val(payload.receiving_factory) }}</td>
+          </tr>
+          <tr>
+            <th>Rampa</th>
+            <td class="compact-text">{{ display_val(payload.warehouse_rampe) }}</td>
+          </tr>
+        </table>
+        <div class="group-divider"></div>
+        <table class="summary-table" style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <th>Číslo výrobku</th>
+            <td class="compact-text">{{ display_val(payload.material_no) }}</td>
+          </tr>
+          <tr>
+            <th>Balení</th>
+            <td class="compact-text">{{ display_val(payload.pal_typ) }}</td>
+          </tr>
+          <tr>
+            <th>Množství</th>
+            <td class="compact-text">
+              {% if payload.volume_value %}{{ format_num(payload.volume_value) }} {{ payload.volume_unit }}{% else
+              %}<span class="missing">Chybí</span>{% endif %}
+            </td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 1rem;">
+      <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Harmonogram dodávek</h2>
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+        <thead>
+          <tr style="background: #e9f0f8; border-bottom: 2px solid var(--success);">
+            <th style="padding: 0.6rem; text-align: center; width: 40px;">#</th>
+            <th style="padding: 0.6rem; text-align: left;">Termín dodání</th>
+            <th style="padding: 0.6rem; text-align: right;">Objednané množství</th>
+            <th style="padding: 0.6rem; text-align: right;">Změna</th>
+            <th style="padding: 0.6rem; text-align: center;">Dní do dodání</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for line in payload.lines %}
+          <tr style="border-bottom: 1px solid var(--border);"
+            class="{{ 'urgent-row' if line.is_urgent }} {{ 'past-row' if line.is_past }}">
+            <td style="padding: 0.6rem; text-align: center; color: var(--text-light);">{{ loop.index }}</td>
+            <td style="padding: 0.6rem;">
+              <span class="date-text">{{ line.delivery_date[8:10] }}.{{ line.delivery_date[5:7] }}.{{
+                line.delivery_date[0:4] }}</span>
+            </td>
+            <td style="padding: 0.6rem; text-align: right;">{{ format_num(line.order_quantity) }}</td>
+            <td
+              style="padding: 0.6rem; text-align: right; color: {{ '#d32f2f' if line.modification and line.modification < 0 else '#2e7d32' if line.modification and line.modification > 0 else 'var(--text-light)' }}; font-weight: {{ '600' if line.modification else 'normal' }};">
+              {% if line.modification is not none %}{{ '+' if line.modification > 0 }}{{ line.modification }}{% else
+              %}-{% endif %}
+            </td>
+            <td style="padding: 0.6rem; text-align: center;">{{ line.days_to_delivery if line.days_to_delivery is not
+              none else '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if history %}
+    <div class="card" style="padding: 1rem; margin-top: 1.5rem;">
+      <h3 style="font-size: 1rem; margin-bottom: 0.75rem;">Historie Lieferplan verzí</h3>
+      {% for item in history %}
+      <div class="history-item">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>Release: <strong>{{ item.release_nr }}</strong></span>
+          <span style="color: var(--text-light); font-size: 0.8rem;">{{ item.uploaded_at }}</span>
+          <a href="/plan/{{ item.plan_id }}/{{ item.ts }}" style="text-decoration: none; font-weight: 500;">Otevřít
+            →</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 </body>
+
 </html>

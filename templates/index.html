@@ -1,42 +1,64 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="cs">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lieferplan Intebo Parser (Local)</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; color: #1f2933; }
-    h1 { margin-bottom: 0.5rem; }
-    .card { border: 1px solid #d9e2ec; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
-    .plan-list { list-style: none; padding: 0; }
-    .plan-list li { margin-bottom: 0.5rem; }
-    .badge { background: #e1e8ff; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.8rem; }
-  </style>
+  <title>Lieferplan Intebo Parser</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body>
-  <h1>Lieferplan Intebo Parser (Local)</h1>
-  <div class="card">
-    <h2>Upload PDF</h2>
-    <form action="/upload" method="post" enctype="multipart/form-data">
-      <input type="file" name="file" accept="application/pdf" required />
-      <button type="submit">Upload</button>
-    </form>
-  </div>
 
-  <div class="card">
-    <h2>Recent Plans</h2>
-    {% if plans %}
-      <ul class="plan-list">
-        {% for plan in plans %}
-          <li>
-            <span class="badge">{{ plan.plan_key }}</span>
-            <a href="/plan/{{ plan.plan_key }}/latest">Open latest</a>
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p>No plans yet. Upload a PDF to get started.</p>
-    {% endif %}
+<body>
+  <div class="container">
+    <header style="margin-bottom: 3rem; text-align: center;">
+      <h1 style="font-size: 2.5rem; letter-spacing: -0.025em;">Lieferplan Extraktor</h1>
+      <p style="color: var(--text-light); font-size: 1.125rem;">Automatizované zpracování dat z PDF.</p>
+    </header>
+
+    <div class="card">
+      <h2>Nahrát nový plán</h2>
+      <p style="margin-bottom: 1.5rem; color: var(--text-light);">Vyberte soubor Lieferplan PDF pro extrakci dat.</p>
+      <form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" accept="application/pdf" required />
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Zpracovat PDF</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Poslední nahrané plány</h2>
+      {% if plans %}
+      <div style="margin-top: 1rem;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="text-align: left; border-bottom: 2px solid var(--border);">
+              <th style="padding: 1rem;">ID Lieferplánu</th>
+              <th style="padding: 1rem;">Datum nahrání</th>
+              <th style="padding: 1rem; text-align: right;">Akce</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for plan in plans %}
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 1rem;">
+                <span style="font-family: inherit; font-weight: 500; color: var(--text);">{{ plan.plan_key }}</span>
+              </td>
+              <td style="padding: 1rem; color: var(--text-light);">{{ plan.uploaded_at }}</td>
+              <td style="padding: 1rem; text-align: right;">
+                <a href="/plan/{{ plan.plan_key }}/latest" class="btn btn-primary"
+                  style="padding: 0.5rem 1rem; font-size: 0.875rem;">Zobrazit</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p style="text-align: center; padding: 2rem; color: var(--text-light);">Zatím nebyly zpracovány žádné plány.
+        Nahrajte první PDF výše.</p>
+      {% endif %}
+    </div>
   </div>
 </body>
+
 </html>

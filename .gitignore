@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Data and Secrets (CRITICAL for privacy)
+data/
+temp_auto.pdf
+*.pdf
+!test_sample.pdf
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,38 @@
+{
+  "receiving_factory": "Buses GmbH Werk 0028",
+  "warehouse_rampe": "780W",
+  "material_no": "A 644 921 01 31 7E86",
+  "pal_typ": "4314",
+  "volume_value": 10000,
+  "volume_unit": "PC",
+  "release_nr": "172",
+  "lines": [
+    {
+      "delivery_date": "2026-03-16",
+      "order_quantity": 30,
+      "modification": 0
+    },
+    {
+      "delivery_date": "2026-04-20",
+      "order_quantity": 20,
+      "modification": 0
+    },
+    {
+      "delivery_date": "2026-06-08",
+      "order_quantity": 20,
+      "modification": 0
+    },
+    {
+      "delivery_date": "2026-07-13",
+      "order_quantity": 20,
+      "modification": 20
+    }
+  ],
+  "missing_fields": [],
+  "warnings": [],
+  "debug": {
+    "pdf": "C:\\Users\\ccaal\\Downloads\\projects\\Consult\\Majky\\intebo\\data\\plans\\Buses_GmbH_Werk_0028_780W_A_172\\raw\\2026-02-06T211335Z.pdf",
+    "lines_count": 4,
+    "text_length": 1844
+  }
+}
