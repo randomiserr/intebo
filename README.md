@@ -2,7 +2,7 @@
 
 Tento nástroj slouží k lokálnímu zpracování PDF souborů "Lieferplan", extrakci dat a generování Excel souborů. Aplikace také obsahuje webový dashboard pro přehlednou správu plánů, sledování termínů a kontrolu změn v množství ("ghost rows").
 
-Všechna data zůstávají uložena lokálně na vašem počítači a nejsou odesílána na žádné externí servery.
+Ve stávající verzi zůstávají data uložena lokálně na vašem počítači a nejsou odesílána na žádné externí servery.
 
 ## Požadavky
 
