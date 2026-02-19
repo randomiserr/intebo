@@ -50,10 +50,12 @@
     }
 
     .urgent-row {
-      background-color: #fff5f5 !important;
-      border-left: 4px solid #d32f2f !important;
+      /* UNIFIED: Use same Orange styling as row-has-ghost */
+      background-color: #fff8e1 !important;
+      border-left: 4px solid #ff9800 !important;
     }
 
+    /* .past-row ... */
     .past-row {
       background-color: #fafafa !important;
       opacity: 0.6;
@@ -61,17 +63,94 @@
       border-left: 4px solid #ccc !important;
     }
 
-    .past-row .date-text {
-      font-weight: 400 !important;
+    /* ... */
+
+    /* Reset styles when processed */
+    /* Reset styles when processed */
+    .row-processed,
+    .row-processed.urgent-row,
+    .row-processed.row-has-ghost,
+    .row-processed.row-ghost {
+      text-decoration: line-through;
+      opacity: 0.5;
+      background-color: #fafafa !important;
+      color: #999 !important;
+      border-left: none !important;
+      border-right: none !important;
     }
 
-    .date-text {
-      font-family: inherit;
-      font-weight: 400;
+    /* Force all child cells to be grey and crossed out */
+    .row-processed td,
+    .row-processed span,
+    .row-processed div {
+      color: #999 !important;
+      text-decoration: line-through;
     }
 
-    .urgent-row .date-text {
+    /* UNLESS it is the checkbox */
+    .row-processed input {
+      text-decoration: none;
+    }
+
+    /* Grey out badge when processed */
+    .row-processed .ghost-badge {
+      background: #eee !important;
+      color: #999 !important;
+      text-decoration: line-through;
+    }
+
+    /* ... existing checkbox styling ... */
+
+    /* Expanded Row Highlight */
+    .row-expanded {
+      background-color: #fff8e1 !important;
+      border-bottom: none !important;
+      /* Remove bottom border so it merges with ghost rows */
+    }
+
+    .row-ghost {
+      background-color: #fff !important;
+      border-bottom: none !important;
+      font-style: italic;
+      color: #999;
+    }
+
+    .row-has-ghost {
+      border-top: none !important;
+      background-color: #fff8e1 !important;
+      position: relative;
+    }
+
+    .row-ghost,
+    .row-has-ghost {
+      border-left: 4px solid #ff9800 !important;
+    }
+
+    .ghost-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+      color: #e65100;
+      background: #ffe0b2;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      margin-left: 0.5rem;
       font-weight: 600;
+      font-style: normal;
+      text-decoration: none !important;
+    }
+
+    /* Checkbox styling */
+    input[type="checkbox"] {
+      accent-color: #1976d2;
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    .ghost-hidden {
+      display: none;
     }
   </style>
 </head>
@@ -162,29 +241,87 @@
           <tr style="background: #e9f0f8; border-bottom: 2px solid var(--success);">
             <th style="padding: 0.6rem; text-align: center; width: 40px;">#</th>
             <th style="padding: 0.6rem; text-align: left;">Termín dodání</th>
+            <th style="padding: 0.6rem; text-align: left;">Detail</th>
             <th style="padding: 0.6rem; text-align: right;">Objednané množství</th>
             <th style="padding: 0.6rem; text-align: right;">Změna</th>
             <th style="padding: 0.6rem; text-align: center;">Dní do dodání</th>
+            <th style="padding: 0.6rem; text-align: center;">Zpracováno</th>
           </tr>
         </thead>
         <tbody>
           {% for line in payload.lines %}
-          <tr style="border-bottom: 1px solid var(--border);"
-            class="{{ 'urgent-row' if line.is_urgent }} {{ 'past-row' if line.is_past }}">
-            <td style="padding: 0.6rem; text-align: center; color: var(--text-light);">{{ loop.index }}</td>
-            <td style="padding: 0.6rem;">
-              <span class="date-text">{{ line.delivery_date[8:10] }}.{{ line.delivery_date[5:7] }}.{{
-                line.delivery_date[0:4] }}</span>
+          <!-- Main Row -->
+          <tr id="row-{{ loop.index }}"
+            onclick="if(!event.target.closest('a') && !event.target.closest('input')) toggleGhost(this.querySelector('.ghost-toggle') || this, 'ghost-group-{{ loop.index }}')"
+            class="item-row {{ '' if line.is_processed else ('row-has-ghost' if line.has_ghost else 'urgent-row' if line.is_urgent else 'past-row' if line.is_past else '') }} {{ 'row-processed' if line.is_processed else '' }}">
+            {% set outer_loop = loop %}
+
+            <td style="padding: 0.6rem; text-align: center; color: var(--text-light);">
+              {{ line.display_index }}
+              {% if line.has_ghost %}
+              <span class="ghost-toggle {{ 'grey' if line.is_processed else 'orange' }}"
+                style="cursor: pointer; margin-left: 4px;">⚠</span>
+              {% endif %}
             </td>
+
+            <td style="padding: 0.6rem;">
+              <span class="date-text">
+                {{ line.delivery_date[8:10] }}.{{ line.delivery_date[5:7] }}.{{ line.delivery_date[0:4] }}
+              </span>
+            </td>
+
+            <td style="padding: 0.6rem;">
+              {% if line.has_ghost %}
+              <span class="ghost-badge {{ 'processed-badge' if line.is_processed else '' }}">Změna množství, ale již ve
+                výrobě</span>
+              {% endif %}
+            </td>
+
             <td style="padding: 0.6rem; text-align: right;">{{ format_num(line.order_quantity) }}</td>
+
             <td
               style="padding: 0.6rem; text-align: right; color: {{ '#d32f2f' if line.modification and line.modification < 0 else '#2e7d32' if line.modification and line.modification > 0 else 'var(--text-light)' }}; font-weight: {{ '600' if line.modification else 'normal' }};">
               {% if line.modification is not none %}{{ '+' if line.modification > 0 }}{{ line.modification }}{% else
               %}-{% endif %}
             </td>
-            <td style="padding: 0.6rem; text-align: center;">{{ line.days_to_delivery if line.days_to_delivery is not
-              none else '-' }}</td>
+
+            <td
+              style="padding: 0.6rem; text-align: center; color: {{ '#d32f2f' if not line.is_processed and line.days_to_delivery is not none and line.days_to_delivery < 45 else 'inherit' }}; font-weight: {{ '600' if not line.is_processed and line.days_to_delivery is not none and line.days_to_delivery < 45 else 'normal' }};">
+              {{ line.days_to_delivery if line.days_to_delivery is not none else '-' }}
+            </td>
+
+            <td style="padding: 0.6rem; text-align: center;">
+              <input type="checkbox" class="processed-check" data-date="{{ line.delivery_date }}"
+                data-qty="{{ line.order_quantity }}" data-group-id="ghost-group-{{ loop.index }}"
+                data-urgency="{{ 'urgent-row' if line.is_urgent else '' }}"
+                data-has-ghost="{{ 'row-has-ghost' if line.has_ghost else '' }}" {% if line.is_processed %}checked{%
+                endif %}>
+            </td>
           </tr>
+
+          <!-- Ghost Rows (Hidden by default) -->
+          {% if line.ghosts %}
+          {% for ghost in line.ghosts %}
+          <tr class="ghost-row ghost-group-{{ outer_loop.index }} ghost-hidden">
+            <td style="padding: 0.6rem; text-align: center;">
+              <!-- Indent -->
+              <span style="visibility: hidden; margin-right: 5px; width: 16px; display: inline-block;"></span>
+            </td>
+            <td style="padding: 0.6rem;">
+              <span style="font-style: italic;">{{ ghost.formatted_date }} (Stará verze)</span>
+            </td>
+            <td style="padding: 0.6rem;"></td>
+            <td style="padding: 0.6rem; text-align: right; font-weight: bold; color: #999;">{{
+              format_num(ghost.order_quantity) }}</td>
+            <td style="padding: 0.6rem; text-align: right; color: #ccc;">-</td>
+            <td style="padding: 0.6rem; text-align: center; color: #ccc;">{{ ghost.days_to_delivery }}</td>
+            <td style="padding: 0.6rem; text-align: center;">
+              <input type="checkbox" disabled checked style="opacity: 0.5;">
+            </td>
+          </tr>
+          {% endfor %}
+          {% endif %}
+
           {% endfor %}
         </tbody>
       </table>
@@ -206,6 +343,144 @@
     </div>
     {% endif %}
   </div>
+  <script>
+    function toggleGhost(el, groupId) {
+      // Toggle visibility of all rows with class groupId
+      const rows = document.querySelectorAll('.' + groupId);
+      // Ensure we target the icon span if el is unrelated
+      // In onclick we pass 'this.querySelector(...)' or 'this'
+      // If 'this' is passed but no icon exists (e.g. click on row), we might not find icon if it's not passed explicitly.
+      // But the onclick is consistent in HTML.
+
+      // Find icon inside the clicked element or the element itself
+      // If el is the row text, we might not have the icon easily. 
+      // HTML: toggleGhost(this.querySelector('.ghost-toggle') || this, ...)
+
+      // If el has class ghost-toggle, used it. Otherwise search.
+      let icon = el.classList.contains('ghost-toggle') ? el : el.querySelector('.ghost-toggle');
+      // If still null (maybe unrelated click?), try finding in document? No, scope is row.
+
+      if (rows.length === 0) return;
+
+      // Determine state from first ghost row
+      const isHidden = rows[0].classList.contains('ghost-hidden');
+
+      rows.forEach(r => {
+        if (isHidden) r.classList.remove('ghost-hidden');
+        else r.classList.add('ghost-hidden');
+      });
+
+      // Update Icon Color (if it exists and row is NOT processed)
+      // If processed, it should be grey and generally disabled, but we allow toggling.
+      // Wait, overview logic says:
+      /*
+      const parentRow = el.closest('tr');
+      if (isHidden) { parentRow.classList.add('row-expanded'); } else { parentRow.classList.remove('row-expanded'); }
+      */
+
+      const parentRow = el.closest('tr');
+      if (isHidden) {
+        parentRow.classList.add('row-expanded');
+      } else {
+        parentRow.classList.remove('row-expanded');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      const checks = document.querySelectorAll('.processed-check');
+      const saNo = "{{ payload.scheduling_agreement_no }}".trim();
+      const matNo = "{{ payload.material_no }}".trim();
+
+      checks.forEach(ch => {
+        ch.addEventListener('change', async function () {
+          const date = this.dataset.date;
+          const qty = parseFloat(this.dataset.qty);
+          const state = this.checked;
+          const groupId = this.dataset.groupId;
+
+          try {
+            const resp = await fetch('/api/toggle-row', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sa_no: saNo,
+                material: matNo,
+                date: date,
+                quantity: qty,
+                state: state
+              })
+            });
+
+            if (!resp.ok) {
+              alert('Chyba při ukládání stavu!');
+              this.checked = !state; // Revert
+            } else {
+              // Update UI visually
+              const row = this.closest('tr');
+              const icon = row.querySelector('.ghost-toggle');
+              const ghostBadge = row.querySelector('.ghost-badge');
+
+              // Get original state from data attributes (stored in HTML)
+              const urgencyClass = this.dataset.urgency;
+              const hasGhostClass = this.dataset.hasGhost;
+
+              if (state) {
+                // Processed (Checked)
+                row.classList.add('row-processed');
+                row.classList.remove('row-expanded');
+
+                // Remove urgency/ghost styles
+                if (urgencyClass) row.classList.remove(urgencyClass);
+                if (hasGhostClass) row.classList.remove(hasGhostClass);
+
+                // Grey out badge
+                if (ghostBadge) ghostBadge.classList.add('processed-badge');
+
+                // Auto-collapse ghosts
+                if (groupId) {
+                  const ghosts = document.querySelectorAll('.' + groupId);
+                  ghosts.forEach(g => g.classList.add('ghost-hidden'));
+
+                  if (icon) {
+                    icon.classList.remove('orange');
+                    icon.classList.add('grey');
+                  }
+                }
+              } else {
+                // Unprocessed (Unchecked)
+                row.classList.remove('row-processed');
+
+                // Restore styles
+                if (urgencyClass) row.classList.add(urgencyClass);
+                if (hasGhostClass) row.classList.add(hasGhostClass);
+
+                // Restore badge
+                if (ghostBadge) ghostBadge.classList.remove('processed-badge');
+
+                // Auto-expand if ghosts exist
+                if (groupId) {
+                  const ghosts = document.querySelectorAll('.' + groupId);
+                  if (ghosts.length > 0) {
+                    row.classList.add('row-expanded');
+                    ghosts.forEach(g => g.classList.remove('ghost-hidden'));
+
+                    if (icon) {
+                      icon.classList.remove('grey');
+                      icon.classList.add('orange');
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.error(e);
+            alert('Chyba připojení!');
+            this.checked = !state;
+          }
+        });
+      });
+    });
+  </script>
 </body>
 
 </html>

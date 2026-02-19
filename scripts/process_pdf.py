@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
 
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 from extract_lieferplan import extract_lieferplan
 from generate_plan_xlsx import generate_xlsx
 
