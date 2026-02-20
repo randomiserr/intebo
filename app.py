@@ -15,9 +15,11 @@ from generate_plan_xlsx import generate_xlsx
 from state_manager import StateManager
 from pydantic import BaseModel
 
+import os
+
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+DATA_DIR = Path(os.getenv("INTEBO_DATA_DIR", BASE_DIR / "data"))
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "templates")), name="static")
 
@@ -681,6 +683,12 @@ def approve_plan(plan_id: str, ts: str):
         generate_xlsx(payload, dirs["output"] / "Plan.xlsx", history=history)
         
         return RedirectResponse(url=f"/plan/{plan_id}/latest?success=true", status_code=303)
+    except PermissionError as e:
+        print(f"PermissionError in approve_plan: {e}")
+        raise HTTPException(
+            status_code=400, 
+            detail="Při ukládání došlo k chybě. Vypadá to, že soubor Plan.xlsx (nebo jiný související soubor) je právě otevřený v jiném programu (např. v Excelu). Prosím zavřete jej a zkuste to znovu."
+        )
     except Exception as e:
         print(f"ERROR in approve_plan: {e}")
         traceback.print_exc()

@@ -478,6 +478,14 @@
             color: white;
             border-color: var(--primary);
         }
+
+        .fw-600 {
+            font-weight: 600;
+        }
+
+        .fw-normal {
+            font-weight: normal;
+        }
     </style>
 </head>
 
@@ -614,8 +622,9 @@
                         <th style="text-align: center;">Zpracováno ⬍</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% for item in items %}
+                <!-- Removed overall tbody, creating one per item group for sorting -->
+                {% for item in items %}
+                <tbody class="item-group">
                     <!-- Main Row -->
                     <tr id="row-{{ loop.index }}"
                         onclick="if(!event.target.closest('a') && !event.target.closest('input')) toggleGhost(this.querySelector('.ghost-toggle') || this, 'ghost-group-{{ loop.index }}')"
@@ -644,8 +653,9 @@
                         {% if item.modification and item.modification < 0 %}{% set mod_class='text-red' %}{% endif %} {%
                             if item.modification and item.modification> 0 %}{% set mod_class = 'text-green' %}{% endif
                             %}
-                            <td class="mod-cell {{ mod_class }}"
-                                style="padding: 0.6rem; text-align: right; font-weight: {{ '600' if item.modification else 'normal' }};">
+                            {% set fw_class = 'fw-600' if item.modification else 'fw-normal' %}
+                            <td class="mod-cell {{ mod_class }} {{ fw_class }}"
+                                style="padding: 0.6rem; text-align: right;">
                                 {% if item.modification is not none %}{{ '+' if item.modification > 0 }}{{
                                 item.modification
                                 }}{% else %}-{% endif %}
@@ -721,8 +731,8 @@
                     {% endfor %}
                     {% endif %}
 
-                    {% endfor %}
                 </tbody>
+                {% endfor %}
             </table>
         </div>
     </div>
@@ -984,39 +994,54 @@
             });
         });
 
-        // Sorting logic updated to handle checkboxes
+        // Sorting logic updated to handle grouped tbodies
+        let sortDir = {}; // stores sort direction per column
+
         function sortTable(n, isNumeric = false) {
             const table = document.getElementById("overviewTable");
-            let rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
-            switching = true;
-            dir = "asc";
+            let tbodies = Array.from(table.querySelectorAll('tbody.item-group'));
 
-            // NOTE: Sorting with nested ghost rows is complex.
-            // This simple logic might separate ghosts from their parents.
-            // For now, we allow it, but optimal solution requires grouping in TBODYs.
+            // Toggle direction
+            sortDir[n] = !sortDir[n];
+            const asc = sortDir[n];
 
-            while (switching) {
-                switching = false;
-                rows = table.rows;
-                // Skipping header (0), loop through rows
-                // We need to skip ghost rows in the sorting logic if possible, 
-                // or move them with their parent.
-                // Current simple implementation will treat every TR as sortable.
-                // This WILL break the parent-child visual.
-                // Disabling sorting for now might be safer or refactoring to use TBody per group.
+            tbodies.sort((a, b) => {
+                let rowA = a.querySelector('.item-row');
+                let rowB = b.querySelector('.item-row');
 
-                // Let's stop here. Implementing full sorting for grouped rows in vanilla JS 
-                // without changing to TBody structure is tricky.
-                // Given the request is about ghost behavior, I will comment out sorting for now 
-                // or advise user it might break grouping.
-                // Actually, I'll attempt a quick fix:
-                // Only sort rows that have 'item-row' class? But we can't swap easily.
+                // Get cell text, trim it
+                let valA = rowA.cells[n].innerText.trim();
+                let valB = rowB.cells[n].innerText.trim();
 
-                // REVERT to standard bubble sort but be aware of consequences.
-                // Ideally, we should wrap each item+ghosts in a <tbody> tag.
-            }
-            // Disabling sort temporarily to prevent UI breakage
-            console.log("Sorting is temporarily disabled due to grouped rows structure.");
+                // Custom parsing for days (col 7), modification (col 4), qty (col 3), date (col 5)
+                if (n === 5) {
+                    // Date format is DD.MM.YYYY
+                    if (valA === '-') valA = '';
+                    if (valB === '-') valB = '';
+                    if (valA) {
+                        let parts = valA.split('.');
+                        if (parts.length === 3) valA = parts[2] + parts[1] + parts[0];
+                    }
+                    if (valB) {
+                        let parts = valB.split('.');
+                        if (parts.length === 3) valB = parts[2] + parts[1] + parts[0];
+                    }
+                } else if (isNumeric) {
+                    // Remove spaces (CZ formatting: 1 500) and convert commas to dots
+                    if (valA === '-') valA = -999999999;
+                    else valA = parseFloat(valA.replace(/\\s/g, '').replace(',', '.')) || 0;
+
+                    if (valB === '-') valB = -999999999;
+                    else valB = parseFloat(valB.replace(/\\s/g, '').replace(',', '.')) || 0;
+                }
+
+                if (valA < valB) return asc ? -1 : 1;
+                if (valA > valB) return asc ? 1 : -1;
+                return 0;
+            });
+
+            // Re-append sorted tbodies
+            tbodies.forEach(tbody => table.appendChild(tbody));
         }
     </script>
 </body>

@@ -152,6 +152,30 @@
     .ghost-hidden {
       display: none;
     }
+
+    .text-red {
+      color: #d32f2f;
+    }
+
+    .text-green {
+      color: #2e7d32;
+    }
+
+    .text-light {
+      color: var(--text-light);
+    }
+
+    .text-inherit {
+      color: inherit;
+    }
+
+    .fw-600 {
+      font-weight: 600;
+    }
+
+    .fw-normal {
+      font-weight: normal;
+    }
   </style>
 </head>
 {% macro display_val(val) -%}
@@ -279,24 +303,28 @@
 
             <td style="padding: 0.6rem; text-align: right;">{{ format_num(line.order_quantity) }}</td>
 
-            <td
-              style="padding: 0.6rem; text-align: right; color: {{ '#d32f2f' if line.modification and line.modification < 0 else '#2e7d32' if line.modification and line.modification > 0 else 'var(--text-light)' }}; font-weight: {{ '600' if line.modification else 'normal' }};">
-              {% if line.modification is not none %}{{ '+' if line.modification > 0 }}{{ line.modification }}{% else
-              %}-{% endif %}
-            </td>
+            {% set mod_color_class = 'text-red' if line.modification and line.modification < 0 else ('text-green' if
+              line.modification and line.modification> 0 else 'text-light') %}
+              {% set mod_fw_class = 'fw-600' if line.modification else 'fw-normal' %}
+              <td class="{{ mod_color_class }} {{ mod_fw_class }}" style="padding: 0.6rem; text-align: right;">
+                {% if line.modification is not none %}{{ '+' if line.modification > 0 }}{{ line.modification }}{% else
+                %}-{% endif %}
+              </td>
 
-            <td
-              style="padding: 0.6rem; text-align: center; color: {{ '#d32f2f' if not line.is_processed and line.days_to_delivery is not none and line.days_to_delivery < 45 else 'inherit' }}; font-weight: {{ '600' if not line.is_processed and line.days_to_delivery is not none and line.days_to_delivery < 45 else 'normal' }};">
-              {{ line.days_to_delivery if line.days_to_delivery is not none else '-' }}
-            </td>
+              {% set days_urgent = not line.is_processed and line.days_to_delivery is not none and line.days_to_delivery
+              < 45 %} {% set days_color_class='text-red' if days_urgent else 'text-inherit' %} {% set
+                days_fw_class='fw-600' if days_urgent else 'fw-normal' %} <td
+                class="{{ days_color_class }} {{ days_fw_class }}" style="padding: 0.6rem; text-align: center;">
+                {{ line.days_to_delivery if line.days_to_delivery is not none else '-' }}
+                </td>
 
-            <td style="padding: 0.6rem; text-align: center;">
-              <input type="checkbox" class="processed-check" data-date="{{ line.delivery_date }}"
-                data-qty="{{ line.order_quantity }}" data-group-id="ghost-group-{{ loop.index }}"
-                data-urgency="{{ 'urgent-row' if line.is_urgent else '' }}"
-                data-has-ghost="{{ 'row-has-ghost' if line.has_ghost else '' }}" {% if line.is_processed %}checked{%
-                endif %}>
-            </td>
+                <td style="padding: 0.6rem; text-align: center;">
+                  <input type="checkbox" class="processed-check" data-date="{{ line.delivery_date }}"
+                    data-qty="{{ line.order_quantity }}" data-group-id="ghost-group-{{ loop.index }}"
+                    data-urgency="{{ 'urgent-row' if line.is_urgent else '' }}"
+                    data-has-ghost="{{ 'row-has-ghost' if line.has_ghost else '' }}" {% if line.is_processed %}checked{%
+                    endif %}>
+                </td>
           </tr>
 
           <!-- Ghost Rows (Hidden by default) -->
