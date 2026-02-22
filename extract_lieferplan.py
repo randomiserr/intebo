@@ -88,7 +88,8 @@ def join_pages_text(pdf_path: Path) -> str:
     chunks: List[str] = []
     with pdfplumber.open(str(pdf_path)) as pdf:
         for p in pdf.pages:
-            txt = p.extract_text() or ""
+            # use x_tolerance to better handle column spacing in different generators
+            txt = p.extract_text(x_tolerance=2, y_tolerance=3) or ""
             chunks.append(txt)
     return "\n".join(chunks)
 
@@ -99,16 +100,29 @@ def find_label_field(text: str, label_variants: List[str], multiline: int = 1, n
     """
     lines = text.splitlines()
     for i, line in enumerate(lines):
+        line_clean = line.strip()
         for variant in label_variants:
-            # We look for the label. We use re.sub for cleaning, but searching is simple.
-            if variant.lower() in line.lower():
+            # Flexible matching: allow for extra spaces or minor character differences
+            # Escape regex chars but then replace escaped spaces with flex space
+            var_esc = re.escape(variant).replace(r"\ ", r"\s*")
+            pattern_match = re.compile(var_esc, re.IGNORECASE)
+            
+            if pattern_match.search(line_clean):
                 val_parts = []
                 
                 # Regex to find where the label ends and extract the rest of the line
                 # We handle optional trailing dots/colons/spaces
-                pattern = re.compile(rf".*?{re.escape(variant)}[.:\s]*", re.IGNORECASE)
-                same_line = pattern.sub("", line).strip()
+                pattern_sub = re.compile(rf".*?{var_esc}[.:\s]*", re.IGNORECASE)
+                same_line = pattern_sub.sub("", line_clean).strip()
                 
+                # If the value is BEFORE the label (sometimes happens with pdfplumber ordering)
+                # Check if same_line is empty but the line has content
+                if not same_line and len(line_clean) > len(variant) + 5:
+                     # Attempt to find if value is on the left
+                     parts = pattern_match.split(line_clean)
+                     if parts and parts[0].strip():
+                         same_line = parts[0].strip()
+
                 is_weak = not same_line or re.fullmatch(r"[:\s/.-]+", same_line)
                 
                 if next_line or is_weak:
@@ -132,11 +146,11 @@ def find_material_no(text: str) -> Optional[str]:
     Captures Material No. Supporting multi-line if the label and value are split.
     Keeps the / and trailing numbers.
     """
-    labels = ["Material No", "Material-No", "Pos. Material No", "Pos. Materialnummer", "Materialnummer"]
+    labels = ["Material No", "Material-No", "Pos. Material No", "Pos. Materialnummer", "Materialnummer", "Material-Nummer"]
     val = find_label_field(text, labels, multiline=1)
     if val:
         # Strip German noise if it leaked into the value
-        noise = ["/Z-Format/Ä-Index", "Z-Format/Ä-Index", "/Z-Format", "/Ä-Index"]
+        noise = ["/Z-Format/Ä-Index", "Z-Format/Ä-Index", "/Z-Format", "/Ä-Index", "Daimler Buses-Nr.", "Buses-Nr."]
         for n in noise:
             val = val.replace(n, "").strip()
         return val.strip()
@@ -147,7 +161,7 @@ def find_release_nr(text: str) -> Optional[str]:
     English: Release Nr.
     German: Abruf-Nr.
     """
-    labels = ["Release Nr", "Release number", "Abruf-Nr"]
+    labels = ["Release Nr", "Release number", "Abruf-Nr", "Release-Nr"]
     res = find_label_field(text, labels)
     if res:
         # Extract first "word" or valid part
@@ -163,8 +177,18 @@ def find_pal_typ(text: str) -> Optional[str]:
     labels = ["Pal. Typ", "Pal.Typ", "Ladungsträger"]
     res = find_label_field(text, labels)
     if res:
+        # Prevent picking up adjacent labels if value is empty
+        clean_res = res.strip().lower()
+        if clean_res in ["volume", "fassungsvermögen", "volumen"]:
+            return None
+            
         m = re.match(r"([A-Za-z0-9\-_/]+)", res)
-        return m.group(1) if m else res
+        val = m.group(1) if m else res
+        
+        if val.strip().lower() in ["volume", "fassungsvermögen", "volumen"]:
+            return None
+            
+        return val
     return None
 
 def find_volume(text: str) -> Tuple[Optional[int], Optional[str]]:
@@ -193,8 +217,9 @@ def extract_table_block_lines(text: str) -> List[str]:
     block: List[str] = []
     
     header_patterns = [
-        re.compile(r"Delivery\s+date", re.IGNORECASE),
+        re.compile(r"Delivery\s*date", re.IGNORECASE),
         re.compile(r"Liefertermin", re.IGNORECASE),
+        re.compile(r"Delivery\s*date\s*at", re.IGNORECASE),
     ]
     
     # Page-level footers to skip
@@ -206,30 +231,31 @@ def extract_table_block_lines(text: str) -> List[str]:
     
     # Document-level end markers
     end_patterns = [
-        re.compile(r"^Total\b", re.IGNORECASE),
-        re.compile(r"^Gesamt\b", re.IGNORECASE), # German "Total"
+        re.compile(r"^Total\s*[:\-]?\s*$", re.IGNORECASE), # More specific "Total" line
+        re.compile(r"^Gesamt\s*[:\-]?\s*$", re.IGNORECASE), 
     ]
 
     has_started = False
     for ln in lines:
+        ln_s = ln.strip()
         if not has_started:
-            if any(p.search(ln) for p in header_patterns):
+            if any(p.search(ln_s) for p in header_patterns):
                 has_started = True
             continue
         
-        # Stop at document footer
-        if any(p.search(ln) for p in end_patterns):
+        # Stop at document footer if it's a standalone Total or similar
+        if any(p.fullmatch(ln_s) for p in end_patterns):
             break
             
-        # Skip page footers
-        if any(p.search(ln) for p in skip_patterns):
+        # Skip common filler lines
+        if not ln_s or any(p.search(ln_s) for p in skip_patterns):
             continue
             
         # Skip repeating headers
-        if any(p.search(ln) for p in header_patterns):
+        if any(p.search(ln_s) for p in header_patterns):
             continue
             
-        block.append(ln)
+        block.append(ln_s)
 
     return block
 
@@ -266,6 +292,9 @@ def parse_schedule_rows(block_lines: List[str]) -> Tuple[List[LineItem], List[st
                 # Try parsing as number
                 candidate_qty = normalize_int_de(token_stream[j])
                 if candidate_qty is not None:
+                    # Qty is usually followed by a unit or a mod.
+                    # In some cases, previous columns might have leaked numbers.
+                    # We assume qty is the FIRST number after the date.
                     qty = candidate_qty
                     break
                 # If we hit another date, we missed the quantity
@@ -285,7 +314,6 @@ def parse_schedule_rows(block_lines: List[str]) -> Tuple[List[LineItem], List[st
                 if RE_DATE_DDMMYYYY.fullmatch(token_stream[k]):
                     break
                 # Modification can be +X, -X, or simply X. 
-                # We use a regex that handles signs.
                 if re.fullmatch(r"[+-]?\d+", token_stream[k]):
                     mod = int(token_stream[k])
                     break
@@ -296,7 +324,7 @@ def parse_schedule_rows(block_lines: List[str]) -> Tuple[List[LineItem], List[st
             except ValidationError as ve:
                 warnings.append(f"Validation error for row date={tok}: {ve}")
 
-            # advance i to after qty
+            # advance i to at least after qty
             i = j + 1
             continue
 
@@ -326,17 +354,21 @@ def extract_lieferplan(pdf_path: Path) -> Dict[str, Any]:
     out = LieferplanExtract()
 
     # Capture up to 3 lines for address
-    out.receiving_factory = find_label_field(text, ["Receiv. factory", "Empfangswerk"], multiline=3)
-    out.warehouse_rampe = find_label_field(text, ["Warehouse rampe", "Abladestelle"])
+    out.receiving_factory = find_label_field(text, ["Receiv. factory", "Empfangswerk", "Receiv factory"], multiline=3)
+    out.warehouse_rampe = find_label_field(text, ["Warehouse rampe", "Warehouse-rampe", "Abladestelle"])
     
-    # Scheduling agreement is usually on the line below the label, 
-    # but sometimes there's a manufacturer name in between. We look up to 3 lines.
-    raw_agreement = find_label_field(text, ["Scheduling agreement No", "Lieferplan-Nr"], next_line=True, multiline=3)
+    # Scheduling agreement is usually on the line below the label
+    sa_labels = ["Scheduling agreement No", "Scheduling agreement", "Lieferplan-Nr", "Lieferplannummer"]
+    raw_agreement = find_label_field(text, sa_labels, next_line=True, multiline=3)
     if raw_agreement:
-        # User wants ONLY the first number (before "/")
-        # We extract the first sequence that looks like digits
-        m = re.search(r"(\d+)", raw_agreement)
-        out.scheduling_agreement_no = m.group(1) if m else raw_agreement.splitlines()[0].split()[0].split("/")[0]
+        # Extract first long sequence of digits (SA numbers are usually 8-10 digits)
+        m = re.search(r"(\d{5,})", raw_agreement)
+        if m:
+            out.scheduling_agreement_no = m.group(1)
+        else:
+            # fallback to search for any number
+            m2 = re.search(r"(\d+)", raw_agreement)
+            out.scheduling_agreement_no = m2.group(1) if m2 else raw_agreement.splitlines()[0].strip()
     
     out.material_no = find_material_no(text)
     out.pal_typ = find_pal_typ(text)
