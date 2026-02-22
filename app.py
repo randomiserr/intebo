@@ -253,8 +253,11 @@ def get_history(sa_no: str) -> List[Dict]:
     if not plans_dir.exists():
         return []
     
+    safe_sa = get_safe_id(sa_no)
+    prefix_old = f"SA_{safe_sa}_"
+    prefix_new = f"{safe_sa}_AN_"
     for p_dir in plans_dir.iterdir():
-        if p_dir.is_dir() and p_dir.name.startswith(f"SA_{sa_no}_"):
+        if p_dir.is_dir() and (p_dir.name.startswith(prefix_old) or p_dir.name.startswith(prefix_new)):
             ext_dir = p_dir / "extracted"
             if ext_dir.exists():
                 for f in ext_dir.glob("*.json"):
@@ -435,7 +438,7 @@ def upload_pdf(file: UploadFile = File(...)):
         sa = payload.get("scheduling_agreement_no") or "Unknown"
         rn = payload.get("release_nr") or "Unknown"
         
-        plan_id = f"SA_{get_safe_id(sa)}_AN_{get_safe_id(rn)}"
+        plan_id = f"{get_safe_id(sa)}_AN_{get_safe_id(rn)}"
         
         # Add timestamp metadata
         now_dt = datetime.now(timezone.utc)
