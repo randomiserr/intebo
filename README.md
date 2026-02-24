@@ -129,7 +129,7 @@ systemctl daemon-reload && systemctl enable --now intebo
 
 ### Důležité
 
-- **Single worker only.** Do not use `--workers` — app uses in-memory caching with disk persistence.
-- **No authentication.** Restrict access via firewall or reverse proxy with auth.
-- **Concurrency.** Reads unlimited. Writes work fine for typical usage (single-digit concurrent users).
-- **Backups.** Only `row_states.json` has non-recreatable state. Include it in existing backup rotation if needed.
+- **Pouze Single worker.** Nepoužívejte `--workers` — app používá in-memory caching s disk persistence.
+- **Nemá auth.** Doporučuju omezit přístup skrz firewall, nebo reverse proxy - Každý kdo má link může měnit soubory
+- **Souběžnost.** Reads neomezeně. Zápis v pohodě při běžném použití (desítky users).
+- **Zálohování.** `row_states.json` má dodatečné informace o stavech a zpracování jednotlivých plánů. Vše ostatní je jednoduše znovuvytvořielné.
