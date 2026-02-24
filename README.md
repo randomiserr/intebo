@@ -1,81 +1,135 @@
-# Intebo Lieferplan Parser (Lokální verze)
+# Intebo Lieferplan Parser
 
-Tento nástroj slouží k lokálnímu zpracování PDF souborů "Lieferplan", extrakci dat a generování Excel souborů. Aplikace také obsahuje webový dashboard pro přehlednou správu plánů, sledování termínů a kontrolu změn v množství ("ghost rows").
-
-Ve stávající verzi zůstávají data uložena lokálně na vašem počítači a nejsou odesílána na žádné externí servery.
+Nástroj pro zpracování PDF souborů "Lieferplan", extrakci dat, sledování dodávek a generování Excel souborů. Webový dashboard umožňuje přehlednou správu plánů, sledování termínů, kontrolu změn množství a nahrání skladových inventur (Nadvýroba).
 
 ## Požadavky
 
-- Python 3.10 nebo novější
+- Python 3.10+
 
-### Instalace závislostí
-
-Před prvním spuštěním nainstalujte potřebné knihovny:
+### Requirements
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Spuštění Webové Aplikace
-
-Pro spuštění hlavního rozhraní aplikace (Dashboardu) použijte příkaz:
+## Spuštění
 
 ```bash
-uvicorn app:app --reload --port 8001
+uvicorn app:app --host 0.0.0.0 --port 80
 ```
 
-Aplikace bude dostupná na adrese: [http://localhost:8001](http://localhost:8001)
+Aplikace bude dostupná na `http://<IP-adresa>/`. Pro lokální vývoj: `http://localhost:8001` s `--port 8001`.
 
-### Funkce Webové Aplikace
-- **Nahrávání PDF**: Jednoduché nahrání nového Lieferplanu.
-- **Přehled (Dashboard)**: Agregovaný pohled na všechny položky ze všech aktuálních plánů.
-- **Detail Plánu**: Zobrazení konkrétního Lieferplanu s možností schválení (generuje finální Excel).
-- **Notifikace**: Upozornění na blížící se termíny dodání (< 60 dní) a urgentní změny množství.
-- **Sledování stavu**: Možnost označit jednotlivé řádky jako "Zpracované" (checkbox). Stav se ukládá a pamatuje si ho i při nahrání nové verze plánu.
-- **Ghost Rows**: Pokud se v nové verzi plánu změní množství u již zpracované položky, systém zobrazí původní ("ghost") hodnotu pro kontrolu.
+## Funkce
 
-## Struktura Projektu
+### Lieferplany (PDF)
+- **Nahrávání PDF** — nahrání nového Lieferplanu přes webové rozhraní
+- **Detail plánu** — zobrazení konkrétního Lieferplanu s možností schválení (generuje finální Excel)
+- **Přehled (Dashboard)** — agregovaný pohled na všechny položky ze všech aktuálních plánů
+- **Notifikace** — upozornění na blížící se termíny dodání a urgentní změny množství
+- **Sledování stavu** — možnost označit řádky jako "Zpracované" (checkbox), stav se ukládá trvale
+- **Ghost Rows** — pokud se v nové verzi plánu změní množství u zpracované položky, systém zobrazí původní hodnotu
 
-- **`app.py`**: Hlavní aplikace (FastAPI server). Obsahuje logiku dashboardu a API.
-- **`state_manager.py`**: Správa stavu (ukládání informace o tom, které řádky jsou "hotové"). Data se ukládají do `data/row_states.json`.
-- **`extract_lieferplan.py`**: Jádro pro extrakci dat z PDF (používá `pdfplumber`).
-- **`generate_plan_xlsx.py`**: Generování výstupních Excel souborů.
-- **`scripts/`**: Pomocné skripty (např. CLI nástroje).
-    - `process_pdf.py`: Skript pro manuální zpracování PDF z příkazové řádky.
-- **`tests/`**: Testovací a ověřovací skripty.
-    - `verify_persistence.py`: Ověření, že se stavy řádků správně ukládají.
-    - `reproduce_ghost.py`: Testování logiky pro detekci změn množství.
-- **`data/`**: Složka pro ukládání nahraných plánů a stavových souborů.
+### Inventura / Nadvýroba (Excel)
+- **Nahrávání inventury** — nahrání Excel souboru (POHODA export) se skladovými zásobami
+- **Zobrazení nadvýroby** — na detailu každého plánu se zobrazí odpovídající skladové množství (matched dle čísla materiálu)
+- **Matching** — automatický matching materiálů i při odlišných formátech (různé mezery, varianty kódů)
 
-## Použití CLI (Příkazové řádky)
+## Struktura projektu
 
-Pokud nechcete používat webové rozhraní, můžete využít skripty v `scripts/`:
+| Soubor | Popis |
+|---|---|
+| `app.py` | Hlavní FastAPI server — API, routing, šablony |
+| `extract_lieferplan.py` | Extrakce dat z PDF (pdfplumber + Pydantic) |
+| `generate_plan_xlsx.py` | Generování výstupních Excel souborů |
+| `inventory_parser.py` | Parser inventurních Excel souborů (POHODA) |
+| `state_manager.py` | Správa stavu řádků (zaškrtnutí/zpracování) |
+| `config.py` | Konfigurace (port, cesta k datům) |
+| `templates/` | HTML šablony (index, detail plánu, dashboard) |
+| `scripts/process_pdf.py` | CLI skript pro zpracování PDF |
 
-### Zpracování PDF (End-to-End)
+## CLI (Příkazová řádka)
 
 ```bash
+# Zpracování PDF (end-to-end)
 python scripts/process_pdf.py cesta/k/souboru.pdf --data-dir ./data
-```
 
-Tento příkaz vytvoří strukturu složek v `data/plans/<označení_plánu>/` a vygeneruje Excel.
-
-### Pouze extrakce JSON
-
-```bash
+# Pouze extrakce JSON
 python extract_lieferplan.py input.pdf --out extracted.json
 ```
 
-### Pouze generování Excelu z JSON
+---
 
+## Nasazení (Deployment)
+
+Single-process Python (FastAPI) web app. Filesystem-based storage, no database.
+
+### Požadavky na server
+
+- Python 3.10+, ~1 GB RAM, ~500 MB disk
+- Network access from client machines (port 80 or custom)
+
+### Data Directory
+
+Default: `./data` relative to app root.
+
+Override via environment variable:
 ```bash
-python generate_plan_xlsx.py extracted.json --out Plan.xlsx
+export INTEBO_DATA_DIR=/mnt/storage/intebo-data    # Linux
+$env:INTEBO_DATA_DIR = "D:\intebo-data"            # PowerShell
 ```
 
-## Správa Dat
+Supports any mounted filesystem — local disk, NFS, SMB, Azure Files, AWS EFS, etc.  
+The directory must exist and the app user needs read/write permissions.
 
-Všechna data jsou uložena ve složce `data/`.
-- `data/plans/`: Obsahuje jednotlivé plány (raw PDF, extrahované JSONy, výstupní Excely).
-- `data/row_states.json`: Ukládá stav (zaškrtnutí) jednotlivých řádků.
-- `data/dismissed_notifications.json`: Ukládá seznam skrytých notifikací.
+**Struktura:**
+```
+$INTEBO_DATA_DIR/
+├── plans/                     # Uploaded plans (PDF + extracted JSON + output XLSX)
+├── inventory.json             # Latest inventory upload (overwritten daily)
+├── row_states.json            # Checkbox states (only persistent app state)
+└── dismissed_notifications.json
+```
 
-Žádná data neopouštějí váš počítač.
+> `row_states.json` is the only file with state that can't be recreated from uploads. Everything else is regenerated on upload.
+
+### Windows Service (NSSM)
+
+```cmd
+nssm install InteboParser "C:\Python310\python.exe" "-m uvicorn app:app --host 0.0.0.0 --port 80"
+nssm set InteboParser AppDirectory "C:\Apps\intebo"
+nssm set InteboParser AppEnvironmentExtra "INTEBO_DATA_DIR=D:\intebo-data"
+nssm start InteboParser
+```
+
+### Linux (systemd)
+
+`/etc/systemd/system/intebo.service`:
+```ini
+[Unit]
+Description=Intebo Lieferplan Parser
+After=network.target
+
+[Service]
+Type=simple
+User=intebo
+WorkingDirectory=/opt/intebo
+Environment=INTEBO_DATA_DIR=/mnt/storage/intebo-data
+ExecStart=/usr/bin/python3 -m uvicorn app:app --host 0.0.0.0 --port 80
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now intebo
+```
+
+### Důležité
+
+- **Single worker only.** Do not use `--workers` — app uses in-memory caching with disk persistence.
+- **No authentication.** Restrict access via firewall or reverse proxy with auth.
+- **Concurrency.** Reads unlimited. Writes work fine for typical usage (single-digit concurrent users).
+- **Backups.** Only `row_states.json` has non-recreatable state. Include it in existing backup rotation if needed.

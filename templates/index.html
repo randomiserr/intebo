@@ -208,13 +208,37 @@
       </div>
     </header>
 
-    <div class="card" style="padding: 2rem; text-align: center;">
-      <h2>Nahrát nový plán</h2>
-      <form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".pdf" required style="margin-bottom: 1rem;">
-        <br>
-        <button type="submit" class="btn btn-primary">Nahrát a zpracovat</button>
-      </form>
+    <div style="display: flex; gap: 1.5rem; align-items: stretch; margin-bottom: 2rem;">
+      <!-- Main Upload (Lieferplan PDF) -->
+      <div class="card"
+        style="flex: 2; padding: 2rem; text-align: center; margin: 0; display: flex; flex-direction: column; justify-content: center;">
+        <h2>Nahrát nový plán</h2>
+        <form action="/upload" method="post" enctype="multipart/form-data">
+          <input type="file" name="file" accept=".pdf" required style="margin-bottom: 1rem;">
+          <br>
+          <button type="submit" class="btn btn-primary" style="padding: 0.75rem 1.5rem; font-size: 1rem;">Nahrát a
+            zpracovat PDF</button>
+        </form>
+      </div>
+
+      <!-- Secondary Upload (Nadvýroba Excel) -->
+      <div class="card"
+        style="flex: 1; padding: 1.5rem; text-align: center; margin: 0; background-color: #f8fafc; border: 1px dashed #cbd5e1; display: flex; flex-direction: column; justify-content: center;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Nahrát inventuru (Nadvýroba)</h2>
+        <form action="/upload-inventory" method="post" enctype="multipart/form-data">
+          <input type="file" name="file" accept=".xlsx" required
+            style="margin-bottom: 0.75rem; width: 100%; font-size: 0.8rem;">
+          <br>
+          <button type="submit" class="btn btn-primary"
+            style="background-color: #475569; border: none; font-size: 0.85rem; padding: 0.5rem 1rem;">Nahrát
+            seznam</button>
+        </form>
+        {% if inventory_uploaded_at %}
+        <p style="margin-top: 0.75rem; font-size: 0.75rem; color: #64748b; font-weight: 500;">
+          Aktualizováno: {{ inventory_uploaded_at }}
+        </p>
+        {% endif %}
+      </div>
     </div>
 
     <!-- Old Dashboard Link Removed -->

@@ -24,15 +24,10 @@ def sanitize_key(value: str) -> str:
 
 
 def compute_plan_key(payload: Dict[str, str]) -> str:
-    parts = [
-        payload.get("receiving_factory"),
-        payload.get("warehouse_rampe"),
-        payload.get("material_no"),
-    ]
-    if payload.get("release_nr"):
-        parts.append(payload.get("release_nr"))
-    joined = "_".join(part for part in parts if part)
-    return sanitize_key(joined)
+    """Generate plan key matching app.py convention: {sa_no}_AN_{release_nr}"""
+    sa = payload.get("scheduling_agreement_no") or "Unknown"
+    rn = payload.get("release_nr") or "Unknown"
+    return f"{sanitize_key(sa)}_AN_{sanitize_key(rn)}"
 
 
 def next_version(approved_dir: Path) -> str:
