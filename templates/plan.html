@@ -254,6 +254,23 @@
               %}<span class="missing">Chybí</span>{% endif %}
             </td>
           </tr>
+          <tr>
+            <th>Nadvýroba</th>
+            <td class="compact-text">
+              {% if nadvyroba_qty is not none %}
+              <span style="font-weight: 600; color: #1976d2;">{{ format_num(nadvyroba_qty) }} ks</span>
+              {% else %}
+              <span style="color: #94a3b8;">—</span>
+              {% endif %}
+
+              {% if inventory_uploaded_at %}
+              <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 0.2rem;">Inv. nahrána: {{ inventory_uploaded_at
+                }}</div>
+              {% else %}
+              <div style="font-size: 0.7rem; color: #f87171; margin-top: 0.2rem;">Inventura nenahrána</div>
+              {% endif %}
+            </td>
+          </tr>
         </table>
       </div>
     </div>

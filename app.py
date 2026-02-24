@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from extract_lieferplan import extract_lieferplan
 from generate_plan_xlsx import generate_xlsx
 from state_manager import StateManager
+from inventory_parser import parse_inventory_xlsx
 from pydantic import BaseModel
 
 import os
@@ -34,7 +35,6 @@ def get_aggregated_items() -> List[Dict]:
     and aggregates all line items from those latest versions only.
     Items with ghosts are returned as a single object containing 'ghosts' list.
     """
-    import json
     plans_dir = DATA_DIR / "plans"
     if not plans_dir.exists():
         return []
@@ -64,7 +64,7 @@ def get_aggregated_items() -> List[Dict]:
             # Parse release number safely
             try:
                 rel_val = int(str(rel).strip())
-            except:
+            except (ValueError, TypeError):
                 rel_val = -1
                 
             current_best = best_plans.get(key)
@@ -117,7 +117,7 @@ def get_aggregated_items() -> List[Dict]:
         for line in data.get("lines", []):
                 try:
                     qty_f = float(line.get("order_quantity", 0))
-                except:
+                except (ValueError, TypeError):
                     qty_f = 0.0
                 current_plan_pairs.add((line.get("delivery_date"), qty_f))
         
@@ -128,7 +128,7 @@ def get_aggregated_items() -> List[Dict]:
             try:
                 dd_g = datetime.strptime(date_str, "%Y-%m-%d").date()
                 days_g = (dd_g - today).days
-            except: pass
+            except (ValueError, TypeError): pass
             
             return {
                 "plan_id": plan_id_val,
@@ -175,7 +175,7 @@ def get_aggregated_items() -> List[Dict]:
                     elif (0 <= days < 45) and is_mod:
                         urgency = "urgent_mod" # New state for <45 + mod
                         
-                except: pass
+                except (ValueError, TypeError): pass
                 
                 # Check processed status (for the REAL line)
                 processed = state_manager.get_state(
@@ -274,7 +274,7 @@ def get_history(sa_no: str) -> List[Dict]:
                                 "uploaded_at": data.get("uploaded_at", "Unknown"),
                                 "material_no": data.get("material_no")
                             }
-                    except:
+                    except (json.JSONDecodeError, KeyError, OSError):
                         continue
     return sorted(history_map.values(), key=lambda x: x["ts"], reverse=True)
 
@@ -283,7 +283,7 @@ def format_cz_num(val: Any) -> str:
     try:
         fval = float(val)
         return f"{fval:,.0f}".replace(",", " ").replace(".", ",")
-    except:
+    except (ValueError, TypeError):
         return str(val)
 
 def _load_json(path: Path) -> Dict:
@@ -303,7 +303,7 @@ def load_dismissed():
     try:
         with open(DISMISSED_FILE, "r") as f:
             return json.load(f)
-    except:
+    except (json.JSONDecodeError, FileNotFoundError, OSError):
         return []
 
 def save_dismissed(dismissed_list):
@@ -366,7 +366,7 @@ def get_notifications():
     return notifs
 
 @app.post("/api/dismiss-notification")
-async def dismiss_notification_endpoint(req: DismissRequest):
+def dismiss_notification_endpoint(req: DismissRequest):
     dismissed = load_dismissed()
     if req.notif_id not in dismissed:
         dismissed.append(req.notif_id)
@@ -388,22 +388,32 @@ def index(request: Request):
                         try:
                             data = _load_json(files[-1])
                             uploaded_at = data.get("uploaded_at", "Unknown")
-                        except: pass
+                        except (json.JSONDecodeError, KeyError, OSError): pass
                 plans.append({
                     "plan_key": p_dir.name,
                     "uploaded_at": uploaded_at
                 })
     # Sort plans by uploaded_at descending
     plans = sorted(plans, key=lambda x: x["uploaded_at"], reverse=True)
-    # Sort plans by uploaded_at descending
-    plans = sorted(plans, key=lambda x: x["uploaded_at"], reverse=True)
     
     notifications = get_notifications()
+
+    # Get inventory uploaded_at
+    inventory_uploaded_at = None
+    inventory_path = DATA_DIR / "inventory.json"
+    if inventory_path.exists():
+        try:
+            with open(inventory_path, "r", encoding="utf-8") as f:
+                inv_data = json.load(f)
+                inventory_uploaded_at = inv_data.get("uploaded_at")
+        except (json.JSONDecodeError, OSError):
+            pass
 
     return TEMPLATES.TemplateResponse("index.html", {
         "request": request, 
         "plans": plans,
-        "notifications": notifications
+        "notifications": notifications,
+        "inventory_uploaded_at": inventory_uploaded_at
     })
 
 @app.get("/overview")
@@ -460,6 +470,41 @@ def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         if temp_pdf.exists(): temp_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/upload-inventory")
+def upload_inventory(file: UploadFile = File(...)):
+    if not file.filename.endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail="Soubor musí být ve formátu .xlsx")
+        
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    temp_xlsx = BASE_DIR / f"tmp_inv_{ts}.xlsx"
+    
+    with temp_xlsx.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        inventory_data = parse_inventory_xlsx(temp_xlsx)
+        
+        # Save to inventory.json
+        now_dt = datetime.now(timezone.utc).astimezone()
+        payload = {
+            "uploaded_at": now_dt.strftime("%d.%m.%Y %H:%M"),
+            "items": inventory_data
+        }
+        
+        inventory_file = DATA_DIR / "inventory.json"
+        with inventory_file.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        # Cleanup temp file
+        if temp_xlsx.exists():
+            temp_xlsx.unlink()
+            
+        return RedirectResponse(url="/", status_code=303)
+    except Exception as e:
+        if temp_xlsx.exists():
+            temp_xlsx.unlink()
+        raise HTTPException(status_code=500, detail=f"Chyba při zpracování inventury: {str(e)}")
 
 @app.get("/plan/{plan_id}/latest")
 def latest_plan(request: Request, plan_id: str, success: bool = False):
@@ -524,7 +569,7 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
             elif line["is_urgent"]: urgency = "urgent_mod"
             
             line["urgency"] = urgency
-        except:
+        except (ValueError, TypeError, KeyError):
             line["days_to_delivery"] = None
             line["is_past"] = False
             line["is_urgent"] = False
@@ -559,7 +604,7 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
             dd = datetime.strptime(date_str, "%Y-%m-%d").date()
             days = (dd - today).days
             is_past = days < 0
-        except: pass
+        except (ValueError, TypeError): pass
         
         return {
             "delivery_date": date_str,
@@ -576,54 +621,20 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
         d_date = line.get("delivery_date")
         
         # If we haven't checked for ghost rows for this date yet
-        # If we haven't checked for ghost rows for this date yet
         if d_date not in processed_ghost_dates:
             processed_ghost_dates.add(d_date)
             
             # Get all processed versions from history
             try:
                 hist_qtys = state_manager.get_processed_versions(sa_no, mat_no, d_date)
-            except:
-                hist_qtys = [] # Safety
+            except (json.JSONDecodeError, KeyError, OSError):
+                hist_qtys = []
             
-            # Filter ghost rows: only those NOT in current plan
-            # We want to know if there is a DIFFERENT quantity processed previously
-            # If current quantity matches processed, it's fine.
-            # If there are processed versions that differ from current, those are ghosts.
-            
-            # Actually, get_aggregated_items logic was:
-            # Check if (date, processed_qty) exists in current plan. If not -> ghost.
-            
-            current_date_pairs = set()
-            # We need to look ahead/behind in current plan?
-            # actually `current_plan_pairs` was prepared earlier in the function (I need to check if I deleted it or if it's there)
-            # Assuming it is there.
-            
+            # Find ghost rows: processed versions NOT in current plan
             ghosts = []
             for hq in hist_qtys:
-                 # Check if this specific quantity for this date exists in the current plan lines
-                 # We need to construct current_plan_pairs if not present
-                 pass
-            
-            # Let's rely on the logic that was there:
-            # "if (d_date, hq) not in current_plan_pairs:"
-            
-            for hq in hist_qtys:
                  if (d_date, hq) not in current_plan_pairs:
-                     # Create ghost item
-                     # We need to create a dict that looks like a line
-                     ghost_line = {
-                         "delivery_date": d_date,
-                         "formatted_date": f"{d_date[8:10]}.{d_date[5:7]}.{d_date[0:4]}",
-                         "order_quantity": hq,
-                         "modification": None, # Ghosts don't have mods usually, or we don't track it
-                         "days_to_delivery": days,
-                         "is_ghost": True,
-                         "sa_no": sa_no,
-                         "material_no": mat_no,
-                         "release_nr": "Old" 
-                     }
-                     ghosts.append(ghost_line)
+                     ghosts.append(create_ghost_line(d_date, hq))
             
             if ghosts:
                 line["has_ghost"] = True
@@ -646,6 +657,39 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
     sa_no = payload.get("scheduling_agreement_no", "")
     history = get_history(sa_no)
 
+    # Load Inventory Data
+    nadvyroba_qty = None
+    inventory_uploaded_at = None
+    inventory_path = DATA_DIR / "inventory.json"
+    if inventory_path.exists():
+        try:
+            with open(inventory_path, "r", encoding="utf-8") as f:
+                inv_data = json.load(f)
+                inventory_uploaded_at = inv_data.get("uploaded_at")
+                items = inv_data.get("items", {})
+                
+                # Match material_no. Lieferplan has trailing " /" which we must clear.
+                # Also remove ALL spaces from both sides to handle inconsistent spacing (e.g. French plans)
+                def clean_code(code: str) -> str:
+                    c = str(code).strip()
+                    if c.endswith('/'):
+                        c = c[:-1]
+                    c = c.replace(" ", "")
+                    # For Mercedes-style codes (A + 10 digits), ignore varying color/variant suffixes
+                    if c.startswith('A') and len(c) >= 11:
+                        return c[:11]
+                    return c
+
+                plan_mat_clean = clean_code(mat_no)
+                
+                # Search through the inventory keys, cleaning them the same way
+                for inv_key, qty in items.items():
+                    if plan_mat_clean == clean_code(inv_key):
+                        nadvyroba_qty = qty
+                        break
+        except Exception as e:
+            print(f"Error loading inventory: {e}")
+
     return TEMPLATES.TemplateResponse("plan.html", {
         "request": request,
         "payload": payload,
@@ -655,7 +699,9 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
         "success": success,
         "history": history,
         "format_num": format_cz_num,
-        "today": datetime.now().date()
+        "today": datetime.now().date(),
+        "nadvyroba_qty": nadvyroba_qty,
+        "inventory_uploaded_at": inventory_uploaded_at
     })
 
 @app.post("/plan/{plan_id}/{ts}/approve")

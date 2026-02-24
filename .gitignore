@@ -8,6 +8,7 @@ venv/
 # Data and Secrets (CRITICAL for privacy)
 data/
 temp_auto.pdf
+tmp_inv_*.xlsx
 *.pdf
 !test_sample.pdf
 
