@@ -14,6 +14,7 @@ from extract_lieferplan import extract_lieferplan
 from generate_plan_xlsx import generate_xlsx
 from state_manager import StateManager
 from inventory_parser import parse_inventory_xlsx
+from notes_manager import NotesManager
 from pydantic import BaseModel
 
 import os
@@ -25,6 +26,7 @@ TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "templates")), name="static")
 
 state_manager = StateManager(DATA_DIR)
+notes_manager = NotesManager(DATA_DIR)
 
 # Simple regex to make material/filename safe for Windows paths
 SAFE_PATH_RE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -757,3 +759,33 @@ def toggle_row(req: ToggleRowRequest):
         return {"status": "ok", "new_state": req.state}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class NoteCreateRequest(BaseModel):
+    text: str
+    user: str = "Uživatel"
+
+class NoteUpdateRequest(BaseModel):
+    text: str
+
+@app.get("/api/notes/{sa_no}")
+def get_notes(sa_no: str):
+    return {"notes": notes_manager.get_notes(sa_no)}
+
+@app.post("/api/notes/{sa_no}")
+def add_note(sa_no: str, req: NoteCreateRequest):
+    note = notes_manager.add_note(sa_no, req.user, req.text)
+    return note
+
+@app.put("/api/notes/{sa_no}/{note_id}")
+def update_note(sa_no: str, note_id: str, req: NoteUpdateRequest):
+    note = notes_manager.update_note(sa_no, note_id, req.text)
+    if not note:
+        raise HTTPException(status_code=404, detail="Poznámka nebyla nalezena")
+    return note
+
+@app.delete("/api/notes/{sa_no}/{note_id}")
+def delete_note(sa_no: str, note_id: str):
+    success = notes_manager.delete_note(sa_no, note_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Poznámka nebyla nalezena")
+    return {"status": "ok"}

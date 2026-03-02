@@ -275,6 +275,21 @@
       </div>
     </div>
 
+    <div class="card" style="padding: 1rem; margin-bottom: 1.5rem;" id="notes-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0; font-size: 1.25rem;">Poznámky</h2>
+      </div>
+      <div id="notes-list" style="margin-bottom: 1rem;">
+        <!-- Notes will be rendered here via JS -->
+      </div>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <textarea id="new-note-text" class="form-control" placeholder="Přidat novou poznámku..." rows="2"
+          style="flex: 1; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 0.9rem; resize: vertical;"></textarea>
+        <button class="btn btn-primary" onclick="addNote()"
+          style="align-self: flex-start; padding: 0.5rem 1rem;">Přidat</button>
+      </div>
+    </div>
+
     <div class="card" style="padding: 1rem;">
       <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Harmonogram dodávek</h2>
       <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
@@ -525,6 +540,217 @@
         });
       });
     });
+
+    // Notes Implementation
+    const globalSaNo = "{{ payload.scheduling_agreement_no }}".trim();
+
+    async function loadNotes() {
+      const list = document.getElementById('notes-list');
+      list.innerHTML = '<span style="color: var(--text-light); font-size: 0.9rem;">Načítám poznámky...</span>';
+      try {
+        const resp = await fetch(`/api/notes/${globalSaNo}`);
+        const data = await resp.json();
+        renderNotes(data.notes);
+      } catch (e) {
+        list.innerHTML = '<span style="color: #ef4444; font-size: 0.9rem;">Chyba při načítání poznámek.</span>';
+      }
+    }
+
+    function renderNotes(notes) {
+      const list = document.getElementById('notes-list');
+      if (!notes || notes.length === 0) {
+        list.innerHTML = '<span style="color: var(--text-light); font-size: 0.9rem; font-style: italic;">Zatím nebyly přidány žádné poznámky.</span>';
+        return;
+      }
+
+      list.innerHTML = '';
+      notes.forEach(n => {
+        const div = document.createElement('div');
+        div.className = 'note-item';
+        div.id = `note-item-${n.id}`;
+        div.dataset.id = n.id;
+        div.dataset.text = n.text;
+        div.style.padding = '0.75rem';
+        div.style.paddingRight = '6rem'; // Prevent text from overlapping centered icons
+        div.style.background = '#f8fafc';
+        div.style.borderLeft = '4px solid #1976d2';
+        div.style.marginBottom = '0.5rem';
+        div.style.borderRadius = '0 4px 4px 0';
+        div.style.position = 'relative';
+        div.style.display = 'flex';
+        div.style.flexDirection = 'column';
+        div.style.justifyContent = 'center';
+        div.style.minHeight = '3.5rem';
+
+        let dateStr = n.updated_at || n.created_at || '';
+        if (dateStr.includes(' ')) {
+          dateStr = dateStr.split(' ')[0]; // Remove time, keep only DD.MM.YYYY
+        }
+
+        const dateDiv = document.createElement('div');
+        dateDiv.id = `note-date-${n.id}`;
+        dateDiv.style.fontSize = '0.75rem';
+        dateDiv.style.color = 'var(--text-light)';
+        dateDiv.style.marginBottom = '0.2rem';
+        dateDiv.textContent = dateStr;
+
+        const textDiv = document.createElement('div');
+        textDiv.id = `note-text-${n.id}`;
+        textDiv.style.fontSize = '0.9rem';
+        textDiv.style.whiteSpace = 'pre-line';
+        textDiv.style.color = 'var(--text)';
+        textDiv.style.lineHeight = '1.4';
+        textDiv.textContent = n.text;
+
+        const actions = document.createElement('div');
+        actions.id = `note-actions-${n.id}`;
+        actions.style.position = 'absolute';
+        actions.style.right = '0.75rem';
+        actions.style.top = '50%';
+        actions.style.transform = 'translateY(-50%)';
+        actions.style.display = 'flex';
+        actions.style.alignItems = 'center';
+        actions.style.gap = '8px';
+        actions.innerHTML = `
+          <button onclick="startEditNote('${n.id}')" title="Upravit" style="background:none; border:none; color:#1976d2; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+          </button>
+          <button onclick="confirmDeleteNoteInit('${n.id}')" title="Smazat" style="background:none; border:none; color:#d32f2f; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          </button>
+          <button id="confirm-delete-${n.id}" onclick="deleteNote('${n.id}')" title="Opravdu smazat?" style="display:none; background:none; border:none; color:#d32f2f; cursor:pointer; padding:0; align-items:center; gap: 4px; font-weight: 500;">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+             Potvrdit smazání
+          </button>
+        `;
+
+        const editDiv = document.createElement('div');
+        editDiv.id = `note-edit-${n.id}`;
+        editDiv.style.display = 'none';
+        editDiv.style.flexDirection = 'column';
+        editDiv.style.gap = '0.5rem';
+        editDiv.style.width = '100%';
+        editDiv.innerHTML = `
+          <textarea id="note-textarea-${n.id}" class="form-control" rows="2" style="width:100%; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 0.9rem; resize: vertical;">${escapeHtml(n.text)}</textarea>
+          <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+             <button onclick="cancelEditNote('${n.id}')" title="Zrušit" style="background:transparent; border:1px solid #ccc; border-radius:4px; font-size: 0.85rem; padding:0.3rem 0.8rem; cursor:pointer;">
+               Zrušit
+             </button>
+             <button onclick="saveEditNote('${n.id}')" title="Uložit" style="background:#1976d2; border:none; border-radius:4px; color:white; font-size: 0.85rem; padding:0.3rem 0.8rem; cursor:pointer;">
+               Uložit
+             </button>
+          </div>
+        `;
+
+        div.appendChild(dateDiv);
+        div.appendChild(textDiv);
+        div.appendChild(actions);
+        div.appendChild(editDiv);
+        list.appendChild(div);
+      });
+    }
+
+    function confirmDeleteNoteInit(id) {
+      const actions = document.getElementById(`note-actions-${id}`);
+      actions.children[0].style.display = 'none'; // hide edit
+      actions.children[1].style.display = 'none'; // hide delete
+      actions.children[2].style.display = 'flex'; // show confirm delete
+
+      setTimeout(() => {
+        if (document.getElementById(`note-actions-${id}`)) {
+          actions.children[0].style.display = 'flex';
+          actions.children[1].style.display = 'flex';
+          actions.children[2].style.display = 'none';
+        }
+      }, 3000);
+    }
+
+    function startEditNote(id) {
+      document.getElementById(`note-date-${id}`).style.display = 'none';
+      document.getElementById(`note-text-${id}`).style.display = 'none';
+      document.getElementById(`note-edit-${id}`).style.display = 'flex';
+      document.getElementById(`note-actions-${id}`).style.display = 'none';
+
+      const textarea = document.getElementById(`note-textarea-${id}`);
+      textarea.value = document.getElementById(`note-item-${id}`).dataset.text;
+      textarea.focus();
+    }
+
+    function cancelEditNote(id) {
+      document.getElementById(`note-date-${id}`).style.display = 'block';
+      document.getElementById(`note-text-${id}`).style.display = 'block';
+      document.getElementById(`note-edit-${id}`).style.display = 'none';
+      document.getElementById(`note-actions-${id}`).style.display = 'flex';
+    }
+
+    async function saveEditNote(id) {
+      const newText = document.getElementById(`note-textarea-${id}`).value.trim();
+      const originalText = document.getElementById(`note-item-${id}`).dataset.text;
+
+      if (!newText) return;
+      if (newText === originalText) {
+        cancelEditNote(id);
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/api/notes/${globalSaNo}/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: newText })
+        });
+        if (resp.ok) loadNotes();
+        else alert('Chyba při upravení!');
+      } catch (e) {
+        alert('Chyba připojení!');
+      }
+    }
+
+    function escapeHtml(unsafe) {
+      return unsafe.replace(/[&<"'>]/g, function (m) {
+        switch (m) {
+          case '&': return '&amp;';
+          case '<': return '&lt;';
+          case '>': return '&gt;';
+          case '"': return '&quot;';
+          case "'": return '&#039;';
+        }
+      });
+    }
+
+    async function addNote() {
+      const textInput = document.getElementById('new-note-text');
+      const text = textInput.value.trim();
+      if (!text) return;
+
+      try {
+        const resp = await fetch(`/api/notes/${globalSaNo}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text })
+        });
+        if (resp.ok) {
+          textInput.value = '';
+          loadNotes();
+        } else {
+          alert('Chyba při přidávání poznámky!');
+        }
+      } catch (e) {
+        alert('Chyba připojení!');
+      }
+    }
+
+    async function deleteNote(id) {
+      try {
+        const resp = await fetch(`/api/notes/${globalSaNo}/${id}`, { method: 'DELETE' });
+        if (resp.ok) loadNotes();
+        else alert('Chyba při mazání!');
+      } catch (e) {
+        alert('Chyba připojení!');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadNotes);
   </script>
 </body>
 
