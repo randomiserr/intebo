@@ -11,6 +11,7 @@ class StateManager:
 
     def _ensure_file(self):
         if not self.state_file.exists():
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
             self._save_disk({})
 
     def _load_state(self) -> Dict[str, Any]:

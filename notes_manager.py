@@ -12,6 +12,7 @@ class NotesManager:
 
     def _ensure_file(self):
         if not self.notes_file.exists():
+            self.notes_file.parent.mkdir(parents=True, exist_ok=True)
             self._save_disk({})
 
     def _load_notes(self) -> Dict[str, Any]:

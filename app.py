@@ -25,6 +25,8 @@ DATA_DIR = Path(os.getenv("INTEBO_DATA_DIR", BASE_DIR / "data"))
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "templates")), name="static")
 
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 state_manager = StateManager(DATA_DIR)
 notes_manager = NotesManager(DATA_DIR)
 
