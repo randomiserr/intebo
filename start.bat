@@ -15,7 +15,7 @@ if %errorlevel% neq 0 (
 )
 
 echo Instaluji závislosti (to může chvíli trvat, pokud je to poprvé)...
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 echo.
 echo Spouštím aplikační server...
