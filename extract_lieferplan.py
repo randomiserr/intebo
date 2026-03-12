@@ -144,13 +144,18 @@ def find_label_field(text: str, label_variants: List[str], multiline: int = 1, n
 def find_material_no(text: str) -> Optional[str]:
     """
     Captures Material No. Supporting multi-line if the label and value are split.
-    Keeps the / and trailing numbers.
+    Czech PDFs: clean part number is under 'Buses-Nr.' (e.g. A.410.689.00.25).
     """
+    # Try Czech 'Buses-Nr.' first - it has the clean value.
+    # Do NOT search 'Cislo materialu'; that line has garbled content in CZ PDFs.
+    cz_val = find_label_field(text, ["Buses-Nr"], multiline=1)
+    if cz_val:
+        return cz_val.strip()
+
     labels = ["Material No", "Material-No", "Pos. Material No", "Pos. Materialnummer", "Materialnummer", "Material-Nummer"]
     val = find_label_field(text, labels, multiline=1)
     if val:
-        # Strip German noise if it leaked into the value
-        noise = ["/Z-Format/Ä-Index", "Z-Format/Ä-Index", "/Z-Format", "/Ä-Index", "Daimler Buses-Nr.", "Buses-Nr."]
+        noise = ["/Z-Format/\u00c4-Index", "Z-Format/\u00c4-Index", "/Z-Format", "/\u00c4-Index", "Daimler Buses-Nr.", "Buses-Nr."]
         for n in noise:
             val = val.replace(n, "").strip()
         return val.strip()
@@ -160,8 +165,10 @@ def find_release_nr(text: str) -> Optional[str]:
     """
     English: Release Nr.
     German: Abruf-Nr.
+    Czech: Č. odvolávky
     """
-    labels = ["Release Nr", "Release number", "Abruf-Nr", "Release-Nr"]
+    labels = ["Release Nr", "Release number", "Abruf-Nr", "Release-Nr",
+              "Č. odvolávky", "C. odvolávky"]
     res = find_label_field(text, labels)
     if res:
         # Extract first "word" or valid part
@@ -173,19 +180,20 @@ def find_pal_typ(text: str) -> Optional[str]:
     """
     English: Pal.Typ
     German: Ladungsträger
+    Czech: Druh palety
     """
-    labels = ["Pal. Typ", "Pal.Typ", "Ladungsträger"]
+    labels = ["Pal. Typ", "Pal.Typ", "Ladungsträger", "Druh palety"]
     res = find_label_field(text, labels)
     if res:
         # Prevent picking up adjacent labels if value is empty
         clean_res = res.strip().lower()
-        if clean_res in ["volume", "fassungsvermögen", "volumen"]:
+        if clean_res in ["volume", "fassungsvermögen", "volumen", "objem"]:
             return None
             
         m = re.match(r"([A-Za-z0-9\-_/]+)", res)
         val = m.group(1) if m else res
         
-        if val.strip().lower() in ["volume", "fassungsvermögen", "volumen"]:
+        if val.strip().lower() in ["volume", "fassungsvermögen", "volumen", "objem"]:
             return None
             
         return val
@@ -195,8 +203,9 @@ def find_volume(text: str) -> Tuple[Optional[int], Optional[str]]:
     """
     English: Volume
     German: Fassungsvermögen
+    Czech: objem
     """
-    labels = ["Volume", "Fassungsvermögen"]
+    labels = ["Volume", "Fassungsvermögen", "objem", "Objem"]
     res = find_label_field(text, labels)
     if res:
         m = re.search(r"([0-9.,]+)\s*([A-Za-z]+)?", res)
@@ -209,7 +218,7 @@ def find_volume(text: str) -> Tuple[Optional[int], Optional[str]]:
 def extract_table_block_lines(text: str) -> List[str]:
     """
     Locate all schedule table rows across all pages.
-    Starts collecting after the first header ("Delivery date" / "Liefertermin").
+    Starts collecting after the first header ("Delivery date" / "Liefertermin" / "Datum dodání").
     Skips page footers and repeating headers. 
     Stops if it hits a document-level footer (like "Total").
     """
@@ -220,19 +229,23 @@ def extract_table_block_lines(text: str) -> List[str]:
         re.compile(r"Delivery\s*date", re.IGNORECASE),
         re.compile(r"Liefertermin", re.IGNORECASE),
         re.compile(r"Delivery\s*date\s*at", re.IGNORECASE),
+        re.compile(r"Datum\s*dod.n", re.IGNORECASE),  # Czech: "Datum dodání"
     ]
     
     # Page-level footers to skip
     skip_patterns = [
         re.compile(r"^Page\b", re.IGNORECASE),
         re.compile(r"^Version\b", re.IGNORECASE),
-        re.compile(r"^Seite\b", re.IGNORECASE), # German "Page"
+        re.compile(r"^Seite\b", re.IGNORECASE),  # German "Page"
+        re.compile(r"^do\s+závodu", re.IGNORECASE),  # Czech sub-header "do závodu"
+        re.compile(r"^Objednac", re.IGNORECASE),  # Czech col header "Objednací mn."
+        re.compile(r"^Datum\s+dod", re.IGNORECASE),  # Czech col header repeated
     ]
     
     # Document-level end markers
     end_patterns = [
-        re.compile(r"^Total\s*[:\-]?\s*$", re.IGNORECASE), # More specific "Total" line
-        re.compile(r"^Gesamt\s*[:\-]?\s*$", re.IGNORECASE), 
+        re.compile(r"^Total\s*[:\-]?\s*$", re.IGNORECASE),  # More specific "Total" line
+        re.compile(r"^Gesamt\s*[:\-]?\s*$", re.IGNORECASE),
     ]
 
     has_started = False
@@ -253,6 +266,10 @@ def extract_table_block_lines(text: str) -> List[str]:
             
         # Skip repeating headers
         if any(p.search(ln_s) for p in header_patterns):
+            continue
+
+        # Skip Czech separator lines (all underscores/dashes)
+        if re.fullmatch(r"[_\-=]{5,}", ln_s):
             continue
             
         block.append(ln_s)
@@ -354,21 +371,57 @@ def extract_lieferplan(pdf_path: Path) -> Dict[str, Any]:
     out = LieferplanExtract()
 
     # Capture up to 3 lines for address
-    out.receiving_factory = find_label_field(text, ["Receiv. factory", "Empfangswerk", "Receiv factory"], multiline=3)
-    out.warehouse_rampe = find_label_field(text, ["Warehouse rampe", "Warehouse-rampe", "Abladestelle"])
+    # Czech: "Přijímající závod" / "Príjímací závod"
+    out.receiving_factory = find_label_field(
+        text,
+        ["Receiv. factory", "Empfangswerk", "Receiv factory",
+         "Přijímající závod", "Prijimajici zavod", "Přijímací závod"],
+        multiline=3
+    )
+    # Czech: "Místo složení"
+    out.warehouse_rampe = find_label_field(
+        text,
+        ["Warehouse rampe", "Warehouse-rampe", "Abladestelle", "Místo složení", "Misto slozeni"]
+    )
     
-    # Scheduling agreement is usually on the line below the label
+    # Scheduling agreement is usually on the line below the label.
+    # Czech: "Plán dodávek/Číslo nákupčího/Datum" compound label, value "5500974715/702 /10.03.2026".
+    # We extract only the digits BEFORE the first "/".
+    #
+    # Strategy: try standard label search first, then fall back to a CZ-specific direct scan.
     sa_labels = ["Scheduling agreement No", "Scheduling agreement", "Lieferplan-Nr", "Lieferplannummer"]
     raw_agreement = find_label_field(text, sa_labels, next_line=True, multiline=3)
+
+    if not raw_agreement:
+        # Czech fallback: scan all lines for the pattern "Plán dodávek/Číslo" and
+        # find the FIRST line after it that contains 8+ digits followed by "/"
+        # The value may share a line with other text (e.g. "Studene 107 5500974715/702 /10.03.2026")
+        _in_cz_sa = False
+        for _ln in text.splitlines():
+            _ls = _ln.strip()
+            if re.search(r"Pl.n\s+dod.vek", _ls, re.IGNORECASE):
+                _in_cz_sa = True
+                continue
+            if _in_cz_sa:
+                _m = re.search(r"(\d{8,}/.*)", _ls)
+                if _m:
+                    raw_agreement = _m.group(1)
+                    break
+
     if raw_agreement:
-        # Extract first long sequence of digits (SA numbers are usually 8-10 digits)
-        m = re.search(r"(\d{5,})", raw_agreement)
-        if m:
-            out.scheduling_agreement_no = m.group(1)
+        # For Czech format "5500974715/702 /10.03.2026", take only digits before first "/"
+        m_slash = re.match(r"(\d{5,})/", raw_agreement.strip())
+        if m_slash:
+            out.scheduling_agreement_no = m_slash.group(1)
         else:
-            # fallback to search for any number
-            m2 = re.search(r"(\d+)", raw_agreement)
-            out.scheduling_agreement_no = m2.group(1) if m2 else raw_agreement.splitlines()[0].strip()
+            # Standard: extract first long sequence of digits (SA numbers are usually 8-10 digits)
+            m = re.search(r"(\d{5,})", raw_agreement)
+            if m:
+                out.scheduling_agreement_no = m.group(1)
+            else:
+                # fallback to search for any number
+                m2 = re.search(r"(\d+)", raw_agreement)
+                out.scheduling_agreement_no = m2.group(1) if m2 else raw_agreement.splitlines()[0].strip()
     
     out.material_no = find_material_no(text)
     out.pal_typ = find_pal_typ(text)
