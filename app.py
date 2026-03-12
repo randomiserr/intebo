@@ -500,9 +500,21 @@ class OverwriteRequest(BaseModel):
 @app.post("/upload/confirm-overwrite")
 def confirm_overwrite(req: OverwriteRequest):
     """Called when user confirms they want to overwrite an existing plan."""
-    staging_pdf = Path(req.staging)
+    # Security: resolve and validate staging path is within BASE_DIR
+    # and matches the server-generated staging_<ts>.pdf pattern.
+    try:
+        staging_pdf = BASE_DIR.joinpath(Path(req.staging).name).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid staging path")
+    if staging_pdf.parent != BASE_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid staging path")
+    if not re.fullmatch(r"staging_\d{8}T\d{6}\.pdf", staging_pdf.name):
+        raise HTTPException(status_code=400, detail="Invalid staging file name")
     if not staging_pdf.exists():
         raise HTTPException(status_code=404, detail="Staging file not found")
+
+    # Security: sanitize plan_id the same way upload does to prevent path traversal
+    safe_plan_id = get_safe_id(req.plan_id)
 
     try:
         payload = extract_lieferplan(staging_pdf)
@@ -511,7 +523,7 @@ def confirm_overwrite(req: OverwriteRequest):
         payload["uploaded_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         payload["ts_key"] = ts
 
-        dirs = get_plan_dirs(req.plan_id)
+        dirs = get_plan_dirs(safe_plan_id)
         for d in dirs.values():
             d.mkdir(parents=True, exist_ok=True)
 
@@ -521,7 +533,7 @@ def confirm_overwrite(req: OverwriteRequest):
             json.dump(payload, f, indent=2)
 
         from fastapi.responses import JSONResponse
-        return JSONResponse({"redirect": f"/plan/{req.plan_id}/{ts}"})
+        return JSONResponse({"redirect": f"/plan/{safe_plan_id}/{ts}"})
     except Exception as e:
         if staging_pdf.exists(): staging_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
