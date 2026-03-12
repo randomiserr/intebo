@@ -189,30 +189,10 @@
       <a href="/" class="nav-link">← Zpět na přehled</a>
     </div>
 
-    {% if success %}
-    <div class="alert alert-success" style="padding: 0.75rem; margin-bottom: 1.5rem;">✨ Plán byl schválen a XLSX
-      vygenerován!</div>
-    <script>
-      window.onload = function () { window.location.href = "/plan/{{ plan_key }}/download"; };
-    </script>
-    {% endif %}
-
     <div class="card" style="padding: 1rem; margin-bottom: 1.5rem;">
       <div style="display: flex; justify-content: space-between; align-items: flex-start;">
         <h2 style="margin: 0; font-size: 1.25rem;">Souhrn informací</h2>
-        <div style="text-align: right;">
-          {% if approved_at %}
-          <div style="display: inline-block;">
-            <a href="/plan/{{ plan_key }}/download" class="btn btn-primary btn-sm">Stáhnout XLSX</a>
-            <span style="font-size: 0.7rem; color: var(--text-light); display: block; margin-top: 0.4rem;">Exportováno:
-              {{ approved_at }}</span>
-          </div>
-          {% else %}
-          <form action="/plan/{{ plan_key }}/{{ timestamp }}/approve" method="post">
-            <button type="submit" class="btn btn-primary btn-sm">Exportovat a stáhnout</button>
-          </form>
-          {% endif %}
-        </div>
+        <a href="/plan/{{ plan_key }}/download" class="btn btn-primary btn-sm">Stáhnout PDF</a>
       </div>
 
       <div style="margin-top: 1rem;">

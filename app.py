@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
 from extract_lieferplan import extract_lieferplan
-from generate_plan_xlsx import generate_xlsx
+from generate_plan_xlsx import generate_pdf
 from state_manager import StateManager
 from inventory_parser import parse_inventory_xlsx
 from notes_manager import NotesManager
@@ -237,6 +237,8 @@ def get_aggregated_items() -> List[Dict]:
     return items
 
 def get_safe_id(val: str) -> str:
+    if not val:
+        return "Unknown"
     return SAFE_PATH_RE.sub("_", val).strip("_") or "unknown"
 
 def get_plan_dirs(plan_id: str):
@@ -440,7 +442,7 @@ def overview(request: Request):
     })
 
 @app.post("/upload")
-def upload_pdf(file: UploadFile = File(...)):
+def upload_pdf(request: Request, file: UploadFile = File(...)):
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     temp_pdf = BASE_DIR / f"tmp_{ts}.pdf"
     
@@ -454,25 +456,74 @@ def upload_pdf(file: UploadFile = File(...)):
         
         plan_id = f"{get_safe_id(sa)}_AN_{get_safe_id(rn)}"
         
+        # --- Duplicate detection ---
+        dirs = get_plan_dirs(plan_id)
+        plan_already_exists = dirs["extracted"].exists() and any(dirs["extracted"].glob("*.json"))
+        if plan_already_exists:
+            # Save temp PDF under a staging name so confirm-overwrite can reuse it
+            staging_pdf = BASE_DIR / f"staging_{ts}.pdf"
+            shutil.move(temp_pdf, staging_pdf)
+            from fastapi.responses import JSONResponse
+            return JSONResponse({
+                "exists": True,
+                "plan_id": plan_id,
+                "staging": str(staging_pdf),
+                "redirect": f"/plan/{plan_id}/latest"
+            })
+        # --- End duplicate detection ---
+        
         # Add timestamp metadata
         now_dt = datetime.now(timezone.utc)
         payload["uploaded_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         payload["ts_key"] = ts
         
-        dirs = get_plan_dirs(plan_id)
         for d in dirs.values():
             d.mkdir(parents=True, exist_ok=True)
 
-        # Move raw PDF and save extracted JSON
         shutil.move(temp_pdf, dirs["raw"] / f"{ts}.pdf")
         extracted_file = dirs["extracted"] / f"{ts}.json"
         
         with extracted_file.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
-        return RedirectResponse(url=f"/plan/{plan_id}/{ts}", status_code=303)
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"exists": False, "redirect": f"/plan/{plan_id}/{ts}"})
     except Exception as e:
         if temp_pdf.exists(): temp_pdf.unlink()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class OverwriteRequest(BaseModel):
+    staging: str
+    plan_id: str
+
+@app.post("/upload/confirm-overwrite")
+def confirm_overwrite(req: OverwriteRequest):
+    """Called when user confirms they want to overwrite an existing plan."""
+    staging_pdf = Path(req.staging)
+    if not staging_pdf.exists():
+        raise HTTPException(status_code=404, detail="Staging file not found")
+
+    try:
+        payload = extract_lieferplan(staging_pdf)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        now_dt = datetime.now(timezone.utc)
+        payload["uploaded_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        payload["ts_key"] = ts
+
+        dirs = get_plan_dirs(req.plan_id)
+        for d in dirs.values():
+            d.mkdir(parents=True, exist_ok=True)
+
+        shutil.move(staging_pdf, dirs["raw"] / f"{ts}.pdf")
+        extracted_file = dirs["extracted"] / f"{ts}.json"
+        with extracted_file.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"redirect": f"/plan/{req.plan_id}/{ts}"})
+    except Exception as e:
+        if staging_pdf.exists(): staging_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload-inventory")
@@ -511,22 +562,30 @@ def upload_inventory(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Chyba při zpracování inventury: {str(e)}")
 
 @app.get("/plan/{plan_id}/latest")
-def latest_plan(request: Request, plan_id: str, success: bool = False):
+def latest_plan(request: Request, plan_id: str):
     dirs = get_plan_dirs(plan_id)
     files = sorted(dirs["extracted"].glob("*.json"))
     if not files:
         raise HTTPException(status_code=404, detail="No extractions found for this plan.")
-    return view_plan(request, plan_id, files[-1].stem, success=success)
+    return view_plan(request, plan_id, files[-1].stem)
 
 @app.get("/plan/{plan_id}/download")
 def download(plan_id: str):
-    f = get_plan_dirs(plan_id)["output"] / "Plan.xlsx"
-    if not f.exists():
-        raise HTTPException(status_code=404, detail="Plan.xlsx not found. Did you approve the plan?")
-    return FileResponse(f, filename=f"{plan_id}.xlsx")
+    dirs = get_plan_dirs(plan_id)
+    files = sorted(dirs["extracted"].glob("*.json"))
+    if not files:
+        raise HTTPException(status_code=404, detail="No extracted data found for this plan.")
+    payload = _load_json(files[-1])
+    sa_no = payload.get("scheduling_agreement_no") or ""
+    history = get_history(sa_no)
+    out_dir = dirs["output"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "Plan.pdf"
+    generate_pdf(payload, out_path, history=history)
+    return FileResponse(str(out_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
 
 @app.get("/plan/{plan_id}/{ts}")
-def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
+def view_plan(request: Request, plan_id: str, ts: str):
     dirs = get_plan_dirs(plan_id)
     target = dirs["extracted"] / f"{ts}.json"
     
@@ -534,8 +593,6 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
         raise HTTPException(status_code=404, detail=f"Version {ts} not found")
 
     payload = _load_json(target)
-    approved_path = dirs["approved"] / "current.json"
-    approved_at = _load_json(approved_path).get("approved_at") if approved_path.exists() else None
     
     # Calculate lead times and status flags for UI
     today = datetime.now().date()
@@ -699,53 +756,12 @@ def view_plan(request: Request, plan_id: str, ts: str, success: bool = False):
         "payload": payload,
         "plan_key": plan_id,
         "timestamp": ts,
-        "approved_at": approved_at,
-        "success": success,
         "history": history,
         "format_num": format_cz_num,
         "today": datetime.now().date(),
         "nadvyroba_qty": nadvyroba_qty,
         "inventory_uploaded_at": inventory_uploaded_at
     })
-
-@app.post("/plan/{plan_id}/{ts}/approve")
-def approve_plan(plan_id: str, ts: str):
-    import traceback
-    try:
-        dirs = get_plan_dirs(plan_id)
-        source = dirs["extracted"] / f"{ts}.json"
-        
-        if not source.exists():
-            files = sorted(dirs["extracted"].glob("*.json"))
-            if not files: raise HTTPException(status_code=404)
-            source = files[-1]
-
-        payload = _load_json(source)
-        payload["approved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-        # Save to approved
-        dirs["approved"].mkdir(parents=True, exist_ok=True)
-        with (dirs["approved"] / "current.json").open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        
-        # Generate XLSX with history as changelog
-        sa_no = payload.get("scheduling_agreement_no", "")
-        history = get_history(sa_no)
-        
-        dirs["output"].mkdir(parents=True, exist_ok=True)
-        generate_xlsx(payload, dirs["output"] / "Plan.xlsx", history=history)
-        
-        return RedirectResponse(url=f"/plan/{plan_id}/latest?success=true", status_code=303)
-    except PermissionError as e:
-        print(f"PermissionError in approve_plan: {e}")
-        raise HTTPException(
-            status_code=400, 
-            detail="Při ukládání došlo k chybě. Vypadá to, že soubor Plan.xlsx (nebo jiný související soubor) je právě otevřený v jiném programu (např. v Excelu). Prosím zavřete jej a zkuste to znovu."
-        )
-    except Exception as e:
-        print(f"ERROR in approve_plan: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Chyba při exportu: {str(e)}")
 
 class ToggleRowRequest(BaseModel):
     sa_no: str

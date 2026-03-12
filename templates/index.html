@@ -213,8 +213,8 @@
       <div class="card"
         style="flex: 2; padding: 2rem; text-align: center; margin: 0; display: flex; flex-direction: column; justify-content: center;">
         <h2>Nahrát nový plán</h2>
-        <form action="/upload" method="post" enctype="multipart/form-data">
-          <input type="file" name="file" accept=".pdf" required style="margin-bottom: 1rem;">
+        <form id="upload-form" enctype="multipart/form-data">
+          <input type="file" id="upload-file" name="file" accept=".pdf" required style="margin-bottom: 1rem;">
           <br>
           <button type="submit" class="btn btn-primary" style="padding: 0.75rem 1.5rem; font-size: 1rem;">Nahrát a
             zpracovat PDF</button>
@@ -324,7 +324,170 @@
         console.error(e);
       }
     }
+
+    // ── Duplicate Upload Detection ───────────────────────────────────────────
+    let _stagingPath = null;
+    let _pendingPlanId = null;
+
+    document.getElementById('upload-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const fileInput = document.getElementById('upload-file');
+      if (!fileInput.files.length) return;
+
+      const btn = this.querySelector('button[type="submit"]');
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Zpracovávám...';
+
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+
+      try {
+        const resp = await fetch('/upload', { method: 'POST', body: fd });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: 'Neznámá chyba' }));
+          alert('Chyba: ' + (err.detail || resp.statusText));
+          btn.disabled = false; btn.textContent = origText;
+          return;
+        }
+        const data = await resp.json();
+
+        if (data.exists) {
+          // Show overwrite modal
+          _stagingPath = data.staging;
+          _pendingPlanId = data.plan_id;
+          document.getElementById('overwrite-plan-id').textContent = data.plan_id;
+          document.getElementById('overwrite-modal-overlay').style.display = 'flex';
+          btn.disabled = false; btn.textContent = origText;
+        } else {
+          window.location.href = data.redirect;
+        }
+      } catch (err) {
+        alert('Chyba připojení: ' + err.message);
+        btn.disabled = false; btn.textContent = origText;
+      }
+    });
+
+    function closeOverwriteModal() {
+      document.getElementById('overwrite-modal-overlay').style.display = 'none';
+      _stagingPath = null;
+      _pendingPlanId = null;
+    }
+
+    async function confirmOverwrite() {
+      if (!_stagingPath || !_pendingPlanId) return;
+      const btn = document.getElementById('overwrite-btn-confirm');
+      btn.disabled = true;
+      btn.textContent = 'Zpracovávám...';
+      try {
+        const resp = await fetch('/upload/confirm-overwrite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ staging: _stagingPath, plan_id: _pendingPlanId })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.redirect) {
+          window.location.href = data.redirect;
+        } else {
+          alert('Chyba při přepisu: ' + (data.detail || 'Neznámá chyba'));
+          btn.disabled = false; btn.textContent = 'Ano, přepsat';
+        }
+      } catch (err) {
+        alert('Chyba připojení: ' + err.message);
+        btn.disabled = false; btn.textContent = 'Ano, přepsat';
+      }
+    }
   </script>
+
+  <!-- Overwrite Confirmation Modal -->
+  <div id="overwrite-modal-overlay" style="
+    display: none;
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(15,23,42,0.55);
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(3px);
+  ">
+    <div style="
+      background: #fff;
+      border-radius: 14px;
+      padding: 2rem 2.2rem;
+      max-width: 430px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.22);
+      border: 1px solid #e2e8f0;
+      text-align: center;
+      animation: modalIn 0.18s ease;
+    ">
+      <!-- Icon -->
+      <div style="
+        width: 52px; height: 52px;
+        background: #fff8e1;
+        border: 2px solid #ff9800;
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 1.2rem;
+      ">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#e65100" stroke-width="2.2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </div>
+
+      <h3 style="margin: 0 0 0.6rem; font-size: 1.15rem; color: #1a202c;">Lieferplan již existuje</h3>
+      <p style="color: #64748b; font-size: 0.93rem; margin: 0 0 0.4rem;">
+        Lieferplan <strong style="color: #1a202c;" id="overwrite-plan-id"></strong> byl již zpracován.
+      </p>
+      <p style="color: #64748b; font-size: 0.93rem; margin: 0 0 1.6rem;">
+        Chcete nahrát novou verzi a přepsat stávající data?
+      </p>
+
+      <div style="display: flex; gap: 0.8rem; justify-content: center;">
+        <button onclick="closeOverwriteModal()" style="
+          padding: 0.6rem 1.4rem;
+          border: 1.5px solid #cbd5e1;
+          border-radius: 8px;
+          background: #fff;
+          color: #475569;
+          font-size: 0.95rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: background 0.15s, border-color 0.15s;
+        " onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+          Ne, zrušit
+        </button>
+        <button id="overwrite-btn-confirm" onclick="confirmOverwrite()" style="
+          padding: 0.6rem 1.4rem;
+          border: none;
+          border-radius: 8px;
+          background: #1976d2;
+          color: #fff;
+          font-size: 0.95rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: background 0.15s;
+        " onmouseover="this.style.background='#1565c0'" onmouseout="this.style.background='#1976d2'">
+          Ano, přepsat
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    @keyframes modalIn {
+      from {
+        opacity: 0;
+        transform: scale(0.94) translateY(-8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+  </style>
 </body>
 
 </html>
