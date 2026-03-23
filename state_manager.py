@@ -8,7 +8,11 @@ class StateManager:
     def __init__(self, data_dir: Path):
         self.state_file = data_dir / "row_states.json"
         self._ensure_file()
-        self.cache = self._load_state()
+        raw = self._load_state()
+        migrated, changed = self._migrate_keys(raw)
+        self.cache = migrated
+        if changed:
+            self._save_disk(migrated)
 
     def _ensure_file(self):
         if not self.state_file.exists():
@@ -43,6 +47,50 @@ class StateManager:
         # Collapse any remaining internal whitespace
         v = re.sub(r'\s+', '', v)
         return v
+
+    def _migrate_keys(self, state: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+        """Normalize all legacy SA/material keys in an existing state dict.
+
+        Runs once at startup after an upgrade. Any entries stored under raw
+        keys (e.g. "A123 /Z-Format") are re-keyed to their normalized form.
+        If two raw keys collapse to the same normalized key, their row entries
+        are merged and processed=True always wins over False.
+
+        Returns (migrated_state, was_changed).
+        """
+        changed = False
+        new_state: Dict[str, Any] = {}
+
+        for raw_sa, mat_dict in state.items():
+            norm_sa = self._normalize_mat(raw_sa)
+            if norm_sa not in new_state:
+                new_state[norm_sa] = {}
+            if norm_sa != raw_sa:
+                changed = True
+
+            if not isinstance(mat_dict, dict):
+                continue
+
+            for raw_mat, row_dict in mat_dict.items():
+                norm_mat = self._normalize_mat(raw_mat)
+                if norm_mat not in new_state[norm_sa]:
+                    new_state[norm_sa][norm_mat] = {}
+                if norm_mat != raw_mat:
+                    changed = True
+
+                if not isinstance(row_dict, dict):
+                    continue
+
+                for row_key, row_data in row_dict.items():
+                    existing = new_state[norm_sa][norm_mat].get(row_key)
+                    if existing is None:
+                        new_state[norm_sa][norm_mat][row_key] = row_data
+                    else:
+                        # Collision: processed=True always wins
+                        if row_data.get("processed") and not existing.get("processed"):
+                            new_state[norm_sa][norm_mat][row_key] = row_data
+
+        return new_state, changed
 
     def _get_key(self, date: str, quantity: float) -> str:
         """Create a unique key for a row based on its content."""
