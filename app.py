@@ -11,7 +11,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
 from extract_lieferplan import extract_lieferplan
-from generate_plan_xlsx import generate_pdf
 from state_manager import StateManager
 from inventory_parser import parse_inventory_xlsx
 from notes_manager import NotesManager
@@ -587,14 +586,14 @@ def download(plan_id: str):
     files = sorted(dirs["extracted"].glob("*.json"))
     if not files:
         raise HTTPException(status_code=404, detail="No extracted data found for this plan.")
-    payload = _load_json(files[-1])
-    sa_no = payload.get("scheduling_agreement_no") or ""
-    history = get_history(sa_no)
-    out_dir = dirs["output"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "Plan.pdf"
-    generate_pdf(payload, out_path, history=history)
-    return FileResponse(str(out_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
+    
+    ts = files[-1].stem
+    raw_pdf_path = dirs["raw"] / f"{ts}.pdf"
+    
+    if not raw_pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Original PDF not found for this plan.")
+        
+    return FileResponse(str(raw_pdf_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
 
 @app.get("/plan/{plan_id}/{ts}")
 def view_plan(request: Request, plan_id: str, ts: str):

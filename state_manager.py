@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
@@ -26,6 +27,23 @@ class StateManager:
         with self.state_file.open("w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
+    @staticmethod
+    def _normalize_mat(val: str) -> str:
+        """Normalise material/SA numbers before using them as state dict keys.
+
+        Makes keys immune to minor extraction differences across tool versions, e.g.:
+          "A123456789 /"              ->  "A123456789"
+          "A123456789 /Z-Format/..." ->  "A123456789"
+          "A.410.689.00.25"          ->  "A.410.689.00.25"  (dots kept)
+          "None"                     ->  "None"  (unchanged, keeps legacy keys intact)
+        """
+        v = str(val).strip()
+        # Remove everything from the first " /" onwards (PDF noise like "/Z-Format/Ä-Index")
+        v = re.sub(r'\s*/.*$', '', v).strip()
+        # Collapse any remaining internal whitespace
+        v = re.sub(r'\s+', '', v)
+        return v
+
     def _get_key(self, date: str, quantity: float) -> str:
         """Create a unique key for a row based on its content."""
         # Using string representation of quantity to avoid float precision issues in keys
@@ -41,8 +59,10 @@ class StateManager:
         self._check_file_integrity()
         # Use cache instead of loading from disk
         state = self.cache
-        sa_data = state.get(str(sa_no), {})
-        mat_data = sa_data.get(str(material), {})
+        sa_key = self._normalize_mat(sa_no)
+        mat_key = self._normalize_mat(material)
+        sa_data = state.get(sa_key, {})
+        mat_data = sa_data.get(mat_key, {})
         
         processed_qtys = []
         prefix = f"{date}_"
@@ -63,9 +83,10 @@ class StateManager:
         self._check_file_integrity()
         # Use cache instead of loading from disk
         state = self.cache
-        
-        sa_data = state.get(str(sa_no), {})
-        mat_data = sa_data.get(str(material), {})
+        sa_key = self._normalize_mat(sa_no)
+        mat_key = self._normalize_mat(material)
+        sa_data = state.get(sa_key, {})
+        mat_data = sa_data.get(mat_key, {})
         row_key = self._get_key(date, quantity)
         
         row_data = mat_data.get(row_key, {})
@@ -75,17 +96,18 @@ class StateManager:
         self._check_file_integrity()
         # Update cache first
         state = self.cache
-        
+        sa_key = self._normalize_mat(sa_no)
+        mat_key = self._normalize_mat(material)
         # Ensure hierarchy exists
-        if str(sa_no) not in state:
-            state[str(sa_no)] = {}
-        if str(material) not in state[str(sa_no)]:
-            state[str(sa_no)][str(material)] = {}
+        if sa_key not in state:
+            state[sa_key] = {}
+        if mat_key not in state[sa_key]:
+            state[sa_key][mat_key] = {}
             
         row_key = self._get_key(date, quantity)
         
         # Update state
-        state[str(sa_no)][str(material)][row_key] = {
+        state[sa_key][mat_key][row_key] = {
             "processed": is_processed,
             "updated_at": datetime.now().isoformat()
         }
