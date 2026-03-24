@@ -145,13 +145,13 @@ def find_material_no(text: str) -> Optional[str]:
     """
     Captures Material No. Supporting multi-line if the label and value are split.
     Czech PDFs: clean part number is under 'Buses-Nr.' (e.g. A.410.689.00.25).
-    """
-    # Try Czech 'Buses-Nr.' first - it has the clean value.
-    # Do NOT search 'Cislo materialu'; that line has garbled content in CZ PDFs.
-    cz_val = find_label_field(text, ["Buses-Nr"], multiline=1)
-    if cz_val:
-        return cz_val.strip()
 
+    Priority: standard 'Material No' labels first (consistent with older tool
+    versions), then 'Buses-Nr.' as a fallback for Czech-only PDFs that lack the
+    standard label.
+    """
+    # 1. Try standard labels first — these exist in German/English PDFs and
+    #    were the only source before Czech support was added.
     labels = ["Material No", "Material-No", "Pos. Material No", "Pos. Materialnummer", "Materialnummer", "Material-Nummer"]
     val = find_label_field(text, labels, multiline=1)
     if val:
@@ -159,6 +159,13 @@ def find_material_no(text: str) -> Optional[str]:
         for n in noise:
             val = val.replace(n, "").strip()
         return val.strip()
+
+    # 2. Fallback for Czech PDFs where there is no 'Material No' label.
+    #    Do NOT search 'Cislo materialu'; that line has garbled content in CZ PDFs.
+    cz_val = find_label_field(text, ["Buses-Nr"], multiline=1)
+    if cz_val:
+        return cz_val.strip()
+
     return None
 
 def find_release_nr(text: str) -> Optional[str]:

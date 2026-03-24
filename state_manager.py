@@ -36,16 +36,17 @@ class StateManager:
         """Normalise material/SA numbers before using them as state dict keys.
 
         Makes keys immune to minor extraction differences across tool versions, e.g.:
-          "A123456789 /"              ->  "A123456789"
-          "A123456789 /Z-Format/..." ->  "A123456789"
-          "A.410.689.00.25"          ->  "A.410.689.00.25"  (dots kept)
-          "None"                     ->  "None"  (unchanged, keeps legacy keys intact)
+          "A 628 755 24 11 /"         ->  "A6287552411"
+          "A123456789 /Z-Format/..."  ->  "A123456789"
+          "A.628.755.24.11"           ->  "A6287552411"
+          "None"                      ->  "None"  (unchanged)
         """
         v = str(val).strip()
         # Remove everything from the first " /" onwards (PDF noise like "/Z-Format/Ä-Index")
         v = re.sub(r'\s*/.*$', '', v).strip()
-        # Collapse any remaining internal whitespace
-        v = re.sub(r'\s+', '', v)
+        # Strip dots (separator in Buses-Nr format) and spaces (separator in Material No format)
+        # so both "A 628 755 24 11" and "A.628.755.24.11" collapse to "A6287552411"
+        v = re.sub(r'[\s.]+', '', v)
         return v
 
     def _migrate_keys(self, state: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
