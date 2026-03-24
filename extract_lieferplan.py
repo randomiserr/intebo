@@ -144,14 +144,15 @@ def find_label_field(text: str, label_variants: List[str], multiline: int = 1, n
 def find_material_no(text: str) -> Optional[str]:
     """
     Captures Material No. Supporting multi-line if the label and value are split.
-    Czech PDFs: clean part number is under 'Buses-Nr.' (e.g. A.410.689.00.25).
-    """
-    # Try Czech 'Buses-Nr.' first - it has the clean value.
-    # Do NOT search 'Cislo materialu'; that line has garbled content in CZ PDFs.
-    cz_val = find_label_field(text, ["Buses-Nr"], multiline=1)
-    if cz_val:
-        return cz_val.strip()
 
+    Priority:
+      1. Standard 'Material No' labels (German/English PDFs)
+      2. Czech 'Cislo materialu/Vykresu' line - pdfplumber often merges the label
+         and value without a space (e.g. "VykresA 410 689 00 25 /"), so we use a
+         regex to extract the part number pattern directly from the line.
+      3. Fallback to 'Buses-Nr.' (purchaser-specific, only Daimler Buses)
+    """
+    # 1. Standard labels (German/English PDFs)
     labels = ["Material No", "Material-No", "Pos. Material No", "Pos. Materialnummer", "Materialnummer", "Material-Nummer"]
     val = find_label_field(text, labels, multiline=1)
     if val:
@@ -159,7 +160,24 @@ def find_material_no(text: str) -> Optional[str]:
         for n in noise:
             val = val.replace(n, "").strip()
         return val.strip()
+
+    # 2. Czech: "Cislo materialu/Vykresu" - pdfplumber merges label+value,
+    #    e.g. "Cislo materialu/VykresA 410 689 00 25 /"
+    #    We scan for that line and extract the part number with a regex.
+    for ln in text.splitlines():
+        if re.search(r"[Cc\u010c\u010d][i\u00ed]slo\s+materi[a\u00e1]lu", ln, re.IGNORECASE):
+            # Look for Mercedes-style part number: A followed by digit groups
+            m = re.search(r"(A\s*[\d\s.]+\d)\s*/?\s*$", ln)
+            if m:
+                return m.group(1).strip()
+
+    # 3. Last resort: Buses-Nr (purchaser-specific)
+    cz_val = find_label_field(text, ["Buses-Nr"], multiline=1)
+    if cz_val:
+        return cz_val.strip()
+
     return None
+
 
 def find_release_nr(text: str) -> Optional[str]:
     """
