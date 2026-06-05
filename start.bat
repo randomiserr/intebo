@@ -14,6 +14,19 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
+:: Pri prvnim spusteni vytvor config.ini ze sablony
+if not exist config.ini (
+    if exist config.ini.example (
+        echo Vytvarim config.ini ze sablony config.ini.example...
+        copy /Y config.ini.example config.ini >nul
+        echo.
+        echo [!] UPRAVTE config.ini - nastavte data_dir na vasi cestu, pak spustte znovu.
+        notepad config.ini
+        pause
+        exit /b
+    )
+)
+
 echo Instaluji zavislosti (to muze chvili trvat, pokud je to poprve)...
 python -m pip install -r requirements.txt -q
 
