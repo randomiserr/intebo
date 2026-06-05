@@ -1,29 +1,37 @@
 @echo off
 echo ==========================================
-echo Spouštím Intebo Aplikaci lokálně...
+echo Spoustim Intebo Aplikaci...
 echo ==========================================
 echo.
 
 :: Check if python is installed
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python není nainstalován nebo není v PATH.
-    echo Stáhněte a nainstalujte Python z https://www.python.org/downloads/
-    echo DŮLEŽITÉ: Během instalace zaškrtněte políčko "Add python.exe to PATH"!
+    echo [ERROR] Python neni nainstalovan nebo neni v PATH.
+    echo Stahnete a nainstalujte Python z https://www.python.org/downloads/
+    echo DULEZITE: Behem instalace zaskrtnete policko "Add python.exe to PATH"!
     pause
     exit /b
 )
 
-echo Instaluji závislosti (to může chvíli trvat, pokud je to poprvé)...
-python -m pip install -r requirements.txt
+echo Instaluji zavislosti (to muze chvili trvat, pokud je to poprve)...
+python -m pip install -r requirements.txt -q
 
 echo.
-echo Spouštím aplikační server...
-echo Aplikace bude dostupná na http://localhost:8000
-echo (Tento okno můžete nechat otevřené během testování. Zavřete ho pro zastavení serveru.)
+echo Nacitam konfiguraci z config.ini...
+for /f "delims=" %%i in ('python -c "import config; print(config.HOST)"') do set INTEBO_HOST=%%i
+for /f "delims=" %%i in ('python -c "import config; print(config.PORT)"') do set INTEBO_PORT=%%i
+for /f "delims=" %%i in ('python -c "import config; print(config.DATA_DIR)"') do set INTEBO_DATA=%%i
+
+echo.
+echo   Host:     %INTEBO_HOST%
+echo   Port:     %INTEBO_PORT%
+echo   Data dir: %INTEBO_DATA%
+echo.
+echo Aplikace bude dostupna na http://%INTEBO_HOST%:%INTEBO_PORT%
+echo (Toto okno nechte otevrene. Zavrenim okna se server zastavi.)
 echo.
 
-:: Spustím aplikaci na bezpečném portu (8000 místo 80, aby se předešlo chybám s právy administrátora)
-python -m uvicorn app:app --host localhost --port 8000
+python -m uvicorn app:app --host %INTEBO_HOST% --port %INTEBO_PORT%
 
 pause
