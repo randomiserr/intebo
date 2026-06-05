@@ -415,8 +415,7 @@ def index(request: Request):
         except (json.JSONDecodeError, OSError):
             pass
 
-    return TEMPLATES.TemplateResponse("index.html", {
-        "request": request, 
+    return TEMPLATES.TemplateResponse(request, "index.html", {
         "plans": plans,
         "notifications": notifications,
         "inventory_uploaded_at": inventory_uploaded_at
@@ -434,8 +433,7 @@ def overview(request: Request):
 
     notifications = get_notifications()
 
-    return TEMPLATES.TemplateResponse("overview.html", {
-        "request": request, 
+    return TEMPLATES.TemplateResponse(request, "overview.html", {
         "items": items,
         "format_num": format_cz_num,
         "notifications": notifications
@@ -763,8 +761,7 @@ def view_plan(request: Request, plan_id: str, ts: str):
         except Exception as e:
             print(f"Error loading inventory: {e}")
 
-    return TEMPLATES.TemplateResponse("plan.html", {
-        "request": request,
+    return TEMPLATES.TemplateResponse(request, "plan.html", {
         "payload": payload,
         "plan_key": plan_id,
         "timestamp": ts,
