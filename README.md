@@ -2,23 +2,35 @@
 
 Nástroj pro zpracování PDF souborů "Lieferplan", extrakci dat, sledování dodávek a generování Excel souborů. Webový dashboard umožňuje přehlednou správu plánů, sledování termínů, kontrolu změn množství a nahrání skladových inventur (Nadvýroba).
 
-## Požadavky
+## Rychlý start (Windows)
 
-- Python 3.10+
+1. Nainstalovat **Python 3.10–3.13** z [python.org/downloads](https://www.python.org/downloads/) — při instalaci **zaškrtnout „Add python.exe to PATH"**.
+2. Stáhnout projekt: `git clone https://github.com/randomiserr/intebo.git` (nebo ZIP z GitHubu).
+3. Dvojklik na **`start.bat`**.
+   - Při prvním spuštění se vytvoří `config.ini` ze šablony a otevře se v Notepadu — vyplnit `data_dir`, uložit, zavřít.
+   - Skript pak doinstaluje knihovny a spustí server.
+4. V prohlížeči otevřít `http://localhost:8000`.
 
-### Requirements
+> ⚠️ **Doporučujeme Python 3.12.** Python 3.14 je čerstvý a některé knihovny s ním ještě nefungují spolehlivě.
 
-```bash
-pip install -r requirements.txt
+## Konfigurace (`config.ini`)
+
+Veškerá konfigurace na jednom místě — bez úprav kódu. Soubor `config.ini` je per-PC (v `.gitignore`), šablona je `config.ini.example`.
+
+```ini
+[paths]
+; Lokální:        data_dir = C:\intebo-data
+; Sdílená:        data_dir = \\fileserver\intebo-data
+; Google Drive:   data_dir = G:\My Drive\intebo-data
+; Prázdné:        použije se ./data vedle app.py
+data_dir =
+
+[server]
+host = localhost    ; nebo 0.0.0.0 pro přístup z LAN
+port = 8000
 ```
 
-## Spuštění
-
-```bash
-uvicorn app:app --host 0.0.0.0 --port 80
-```
-
-Aplikace bude dostupná na `http://<IP-adresa>/`. Pro lokální vývoj: `http://localhost:8001` s `--port 8001`.
+Hodnoty z `config.ini` lze přebít proměnnými prostředí `INTEBO_DATA_DIR`, `INTEBO_HOST`, `INTEBO_PORT` (užitečné pro nasazení jako služba).
 
 ## Funkce
 
@@ -27,7 +39,7 @@ Aplikace bude dostupná na `http://<IP-adresa>/`. Pro lokální vývoj: `http://
 - **Detail plánu** — zobrazení konkrétního Lieferplanu s možností schválení (generuje finální Excel)
 - **Přehled (Dashboard)** — agregovaný pohled na všechny položky ze všech aktuálních plánů
 - **Notifikace** — upozornění na blížící se termíny dodání a urgentní změny množství
-- **Sledování stavu** — možnost označit řádky jako "Zpracované" (checkbox), stav se ukládá trvale
+- **Sledování stavu** — možnost označit řádky jako „Zpracované" (checkbox), stav se ukládá trvale
 - **Ghost Rows** — pokud se v nové verzi plánu změní množství u zpracované položky, systém zobrazí původní hodnotu
 
 ### Inventura / Nadvýroba (Excel)
@@ -40,11 +52,13 @@ Aplikace bude dostupná na `http://<IP-adresa>/`. Pro lokální vývoj: `http://
 | Soubor | Popis |
 |---|---|
 | `app.py` | Hlavní FastAPI server — API, routing, šablony |
+| `config.py` | Načítá `config.ini` + proměnné prostředí (nesahat — mění se `config.ini`) |
+| `config.ini.example` | Šablona konfigurace (kopíruje se na `config.ini` při prvním startu) |
+| `start.bat` | Spouštěcí skript pro Windows (instalace závislostí + spuštění serveru) |
 | `extract_lieferplan.py` | Extrakce dat z PDF (pdfplumber + Pydantic) |
 | `generate_plan_xlsx.py` | Generování výstupních Excel souborů |
 | `inventory_parser.py` | Parser inventurních Excel souborů (POHODA) |
 | `state_manager.py` | Správa stavu řádků (zaškrtnutí/zpracování) |
-| `config.py` | Konfigurace (port, cesta k datům) |
 | `templates/` | HTML šablony (index, detail plánu, dashboard) |
 | `scripts/process_pdf.py` | CLI skript pro zpracování PDF |
 
@@ -62,41 +76,49 @@ python extract_lieferplan.py input.pdf --out extracted.json
 
 ## Nasazení (Deployment)
 
-Single-process Python (FastAPI) web app. Filesystem-based storage, no database.
+Single-process Python (FastAPI) web app. Filesystem-based storage, žádná databáze.
+
+### Možnosti nasazení
+
+| Scénář | Postup |
+|---|---|
+| **Jeden uživatel, jedno PC** | `start.bat`, `data_dir` na lokální cestu. |
+| **Více uživatelů, sdílená data, každý běží lokálně** | `start.bat` na každém PC, `data_dir` na sdílené úložiště (UNC / Google Drive). Pozor: žádné zámky — souběžný zápis může způsobit ztrátu dat. |
+| **Centrální server (doporučeno pro tým)** | Aplikace běží jako služba na serveru (Windows Service / systemd), uživatelé jen otevřou prohlížeč. Bez konfliktů, čistá záloha. |
 
 ### Požadavky na server
 
-- Python 3.10+, ~1 GB RAM, ~500 MB disk
-- Network access from client machines (port 80 or custom)
+- Python 3.10–3.13, ~1 GB RAM, ~500 MB disk
+- Síťová dostupnost portu (8000 nebo dle `config.ini`) z klientských PC
 
 ### Data Directory
 
-Default: `./data` relative to app root.
+Default: `./data` vedle `app.py`. Lze přebít:
 
-Override via environment variable:
 ```bash
-export INTEBO_DATA_DIR=/mnt/storage/intebo-data    # Linux
-$env:INTEBO_DATA_DIR = "D:\intebo-data"            # PowerShell
+# Linux
+export INTEBO_DATA_DIR=/mnt/storage/intebo-data
+# PowerShell
+$env:INTEBO_DATA_DIR = "D:\intebo-data"
 ```
 
-Supports any mounted filesystem — local disk, NFS, SMB, Azure Files, AWS EFS, etc.  
-The directory must exist and the app user needs read/write permissions.
+Nebo přes `config.ini` (viz výše). Podporuje libovolný připojený souborový systém — lokální disk, NFS, SMB, Azure Files, AWS EFS atd. Složka musí existovat a aplikační uživatel musí mít read/write.
 
 **Struktura:**
 ```
 $INTEBO_DATA_DIR/
-├── plans/                     # Uploaded plans (PDF + extracted JSON + output XLSX)
-├── inventory.json             # Latest inventory upload (overwritten daily)
-├── row_states.json            # Checkbox states (only persistent app state)
+├── plans/                          # Nahrané plány (PDF + extracted JSON + output XLSX)
+├── inventory.json                  # Poslední upload inventury (přepisuje se)
+├── row_states.json                 # Stavy checkboxů (jediný nereprodukovatelný stav)
 └── dismissed_notifications.json
 ```
 
-> `row_states.json` is the only file with state that can't be recreated from uploads. Everything else is regenerated on upload.
+> `row_states.json` je jediný soubor se stavem, který nelze obnovit z uploadů. Vše ostatní lze přegenerovat.
 
 ### Windows Service (NSSM)
 
 ```cmd
-nssm install InteboParser "C:\Python310\python.exe" "-m uvicorn app:app --host 0.0.0.0 --port 80"
+nssm install InteboParser "C:\Python312\python.exe" "-m uvicorn app:app --host 0.0.0.0 --port 8000"
 nssm set InteboParser AppDirectory "C:\Apps\intebo"
 nssm set InteboParser AppEnvironmentExtra "INTEBO_DATA_DIR=D:\intebo-data"
 nssm start InteboParser
@@ -115,7 +137,7 @@ Type=simple
 User=intebo
 WorkingDirectory=/opt/intebo
 Environment=INTEBO_DATA_DIR=/mnt/storage/intebo-data
-ExecStart=/usr/bin/python3 -m uvicorn app:app --host 0.0.0.0 --port 80
+ExecStart=/usr/bin/python3 -m uvicorn app:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
 
@@ -127,9 +149,31 @@ WantedBy=multi-user.target
 systemctl daemon-reload && systemctl enable --now intebo
 ```
 
+### Hezká URL (reverzní proxy)
+
+Pro `http://intebo.firma.local` místo `http://server:8000` použít nginx / IIS / Caddy jako reverzní proxy. Nejjednodušší je **Caddy**:
+
+```
+intebo.firma.local {
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+Caddy navíc umí automaticky HTTPS přes firemní CA.
+
 ### Důležité
 
-- **Pouze Single worker.** Nepoužívejte `--workers` — app používá in-memory caching s disk persistence.
-- **Nemá auth.** Doporučuju omezit přístup skrz firewall, nebo reverse proxy - Každý kdo má link může měnit soubory
-- **Souběžnost.** Reads neomezeně. Zápis v pohodě při běžném použití (desítky users).
-- **Zálohování.** `row_states.json` má dodatečné informace o stavech a zpracování jednotlivých plánů. Vše ostatní je jednoduše znovuvytvořielné.
+- **Single worker.** Nepoužívejte `--workers > 1` — app používá in-memory caching s disk persistence.
+- **Nemá auth.** Omezit přístup firewallem nebo reverzní proxy s autentizací. Kdokoliv s URL může měnit data.
+- **Souběžnost.** Reads neomezeně. Zápisy v pohodě při běžném použití (desítky uživatelů). Pro sdílenou složku bez serveru: pozor na souběžný zápis.
+- **Zálohování.** `row_states.json` a obsah `plans/raw/` (originální PDF) — to ostatní lze přegenerovat.
+
+## Řešení problémů
+
+| Problém | Řešení |
+|---|---|
+| „python není nainstalován" | Nainstalovat Python a zaškrtnout „Add to PATH". Restartovat cmd. |
+| `pip install` padá na connection reset | Aktualizovat pip: `python -m pip install --upgrade pip`. Pokud nepomůže, problém s firewallem/proxy/antivirem — povolit `pypi.org` a `files.pythonhosted.org`. |
+| `TypeError: unhashable type: 'dict'` v Jinja2 | Stará verze kódu. `git pull` (nebo stáhnout nový ZIP). |
+| Internal Server Error po nahrání | Zkontrolovat, že `data_dir` v `config.ini` ukazuje na existující složku se zápisem. |
+| Aplikace nevidí data na druhém PC | Sdílené úložiště ještě nedosynchronizovalo (Google Drive / OneDrive). Počkat / vynutit „Available offline". |
