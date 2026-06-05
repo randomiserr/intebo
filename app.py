@@ -17,10 +17,11 @@ from notes_manager import NotesManager
 from pydantic import BaseModel
 
 import os
+import config
 
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("INTEBO_DATA_DIR", BASE_DIR / "data"))
+DATA_DIR = config.DATA_DIR
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "templates")), name="static")
 
