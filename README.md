@@ -115,15 +115,6 @@ $INTEBO_DATA_DIR/
 
 > `row_states.json` je jediný soubor se stavem, který nelze obnovit z uploadů. Vše ostatní lze přegenerovat.
 
-### Windows Service (NSSM)
-
-```cmd
-nssm install InteboParser "C:\Python312\python.exe" "-m uvicorn app:app --host 0.0.0.0 --port 8000"
-nssm set InteboParser AppDirectory "C:\Apps\intebo"
-nssm set InteboParser AppEnvironmentExtra "INTEBO_DATA_DIR=D:\intebo-data"
-nssm start InteboParser
-```
-
 ### Linux (systemd)
 
 `/etc/systemd/system/intebo.service`:
@@ -149,31 +140,9 @@ WantedBy=multi-user.target
 systemctl daemon-reload && systemctl enable --now intebo
 ```
 
-### Hezká URL (reverzní proxy)
-
-Pro `http://intebo.firma.local` místo `http://server:8000` použít nginx / IIS / Caddy jako reverzní proxy. Nejjednodušší je **Caddy**:
-
-```
-intebo.firma.local {
-    reverse_proxy 127.0.0.1:8000
-}
-```
-
-Caddy navíc umí automaticky HTTPS přes firemní CA.
-
 ### Důležité
 
 - **Single worker.** Nepoužívejte `--workers > 1` — app používá in-memory caching s disk persistence.
-- **Nemá auth.** Omezit přístup firewallem nebo reverzní proxy s autentizací. Kdokoliv s URL může měnit data.
+- **Nemá auth.** Omezit přístup firewallem. Kdokoliv s URL může měnit data.
 - **Souběžnost.** Reads neomezeně. Zápisy v pohodě při běžném použití (desítky uživatelů). Pro sdílenou složku bez serveru: pozor na souběžný zápis.
 - **Zálohování.** `row_states.json` a obsah `plans/raw/` (originální PDF) — to ostatní lze přegenerovat.
-
-## Řešení problémů
-
-| Problém | Řešení |
-|---|---|
-| „python není nainstalován" | Nainstalovat Python a zaškrtnout „Add to PATH". Restartovat cmd. |
-| `pip install` padá na connection reset | Aktualizovat pip: `python -m pip install --upgrade pip`. Pokud nepomůže, problém s firewallem/proxy/antivirem — povolit `pypi.org` a `files.pythonhosted.org`. |
-| `TypeError: unhashable type: 'dict'` v Jinja2 | Stará verze kódu. `git pull` (nebo stáhnout nový ZIP). |
-| Internal Server Error po nahrání | Zkontrolovat, že `data_dir` v `config.ini` ukazuje na existující složku se zápisem. |
-| Aplikace nevidí data na druhém PC | Sdílené úložiště ještě nedosynchronizovalo (Google Drive / OneDrive). Počkat / vynutit „Available offline". |
