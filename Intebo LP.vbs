@@ -27,31 +27,40 @@ If Not fso.FileExists(configPath) Then
 End If
 
 ' --- 2. Precti host a port z config.ini ---
-Dim host, port
-host = ReadIni(configPath, "host", "localhost")
+Dim bindHost, clientHost, port
+bindHost = ReadIni(configPath, "host", "localhost")
 port = ReadIni(configPath, "port", "8000")
 
+' Pro probe portu a otevreni prohlizece pouzij localhost,
+' kdyz uvicorn posloucha na vsech rozhranich (0.0.0.0).
+' 0.0.0.0 je validni jen jako bind address, ne jako cilova URL.
+If bindHost = "0.0.0.0" Then
+    clientHost = "localhost"
+Else
+    clientHost = bindHost
+End If
+
 ' --- 3. Kontrola, jestli uz server nebezi (port obsazen) ---
-If IsPortOpen(host, port) Then
+If IsPortOpen(clientHost, port) Then
     ' Server uz bezi - jen otevri prohlizec
-    shell.Run "http://" & host & ":" & port, 1, False
+    shell.Run "http://" & clientHost & ":" & port, 1, False
     WScript.Quit
 End If
 
 ' --- 4. Spust server skryte ---
 shell.CurrentDirectory = scriptDir
 ' Vystup serveru jde do server.log pro diagnostiku
-shell.Run "cmd /c python -m uvicorn app:app --host " & host & " --port " & port & " > """ & logPath & """ 2>&1", 0, False
+shell.Run "cmd /c python -m uvicorn app:app --host " & bindHost & " --port " & port & " > """ & logPath & """ 2>&1", 0, False
 
 ' --- 5. Pockej, az server nabehne (max 15 s) ---
 Dim i
 For i = 1 To 30
     WScript.Sleep 500
-    If IsPortOpen(host, port) Then Exit For
+    If IsPortOpen(clientHost, port) Then Exit For
 Next
 
 ' --- 6. Otevri prohlizec ---
-shell.Run "http://" & host & ":" & port, 1, False
+shell.Run "http://" & clientHost & ":" & port, 1, False
 
 ' ============================================================
 ' Pomocne funkce
