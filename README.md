@@ -11,6 +11,14 @@ Nástroj pro zpracování PDF souborů "Lieferplan", extrakci dat, sledování d
    - Skript pak doinstaluje knihovny a spustí server.
 4. V prohlížeči otevřít `http://localhost:8000`.
 
+### Tichý start bez terminálu (`intebo.vbs`)
+
+Po prvním nastavení můžete místo `start.bat` používat **`intebo.vbs`** — spustí server na pozadí bez terminálového okna a automaticky otevře prohlížeč.
+
+Pro pohodlí: pravým tlačítkem na `intebo.vbs` → **Odeslat → Plocha (vytvořit zástupce)**. Zástupci lze přiřadit ikonu (Vlastnosti → Změnit ikonu).
+
+Server běží na pozadí, dokud nezavřete `python.exe` v Task Manageru nebo nerestartujete PC.
+
 > ⚠️ **Doporučujeme Python 3.12.** Python 3.14 je čerstvý a některé knihovny s ním ještě nefungují spolehlivě.
 
 ## Konfigurace (`config.ini`)
