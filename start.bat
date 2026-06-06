@@ -47,12 +47,13 @@ echo   Port:     %INTEBO_PORT%
 echo   Data dir: %INTEBO_DATA%
 echo.
 echo Aplikace bude dostupna na http://%INTEBO_CLIENT_HOST%:%INTEBO_PORT%
-echo Prohlizec se otevre automaticky za par sekund.
+echo Prohlizec se otevre automaticky, jakmile server nabehne.
 echo (Toto okno nechte otevrene. Zavrenim okna se server zastavi.)
 echo.
 
-:: Otevri prohlizec na pozadi (timeout pocka, az server nabehne)
-start "" /B cmd /c "timeout /t 3 /nobreak >nul && start http://%INTEBO_CLIENT_HOST%:%INTEBO_PORT%"
+:: Pomocnik na pozadi: poola server, otevre prohlizec teprve az odpovida.
+:: Pokud server nenabehne do 30 s, browser se neotevre (zadna chybova stranka).
+start "" /B python _open_browser.py http://%INTEBO_CLIENT_HOST%:%INTEBO_PORT%/
 
 python -m uvicorn app:app --host %INTEBO_HOST% --port %INTEBO_PORT%
 
