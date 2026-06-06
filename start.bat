@@ -36,14 +36,24 @@ for /f "delims=" %%i in ('python -c "import config; print(config.HOST)"') do set
 for /f "delims=" %%i in ('python -c "import config; print(config.PORT)"') do set INTEBO_PORT=%%i
 for /f "delims=" %%i in ('python -c "import config; print(config.DATA_DIR)"') do set INTEBO_DATA=%%i
 
+:: 0.0.0.0 je validni jen jako bind adresa, ne jako URL v prohlizeci.
+:: Pro otevreni prohlizece pouzij localhost, kdyz server posloucha na vsech rozhranich.
+set INTEBO_CLIENT_HOST=%INTEBO_HOST%
+if "%INTEBO_HOST%"=="0.0.0.0" set INTEBO_CLIENT_HOST=localhost
+
 echo.
 echo   Host:     %INTEBO_HOST%
 echo   Port:     %INTEBO_PORT%
 echo   Data dir: %INTEBO_DATA%
 echo.
-echo Aplikace bude dostupna na http://%INTEBO_HOST%:%INTEBO_PORT%
+echo Aplikace bude dostupna na http://%INTEBO_CLIENT_HOST%:%INTEBO_PORT%
+echo Prohlizec se otevre automaticky, jakmile server nabehne.
 echo (Toto okno nechte otevrene. Zavrenim okna se server zastavi.)
 echo.
+
+:: Pomocnik na pozadi: poola server, otevre prohlizec teprve az odpovida.
+:: Pokud server nenabehne do 30 s, browser se neotevre (zadna chybova stranka).
+start "" /B python _open_browser.py http://%INTEBO_CLIENT_HOST%:%INTEBO_PORT%/
 
 python -m uvicorn app:app --host %INTEBO_HOST% --port %INTEBO_PORT%
 

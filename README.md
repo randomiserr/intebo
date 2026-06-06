@@ -9,7 +9,9 @@ Nástroj pro zpracování PDF souborů "Lieferplan", extrakci dat, sledování d
 3. Dvojklik na **`start.bat`**.
    - Při prvním spuštění se vytvoří `config.ini` ze šablony a otevře se v Notepadu — vyplnit `data_dir`, uložit, zavřít.
    - Skript pak doinstaluje knihovny a spustí server.
-4. V prohlížeči otevřít `http://localhost:8000`.
+4. Prohlížeč se otevře automaticky na `http://localhost:8000`.
+
+> Pro pohodlí: pravým tlačítkem na `start.bat` → **Odeslat → Plocha (vytvořit zástupce)**.
 
 
 ## Konfigurace (`config.ini`)
