@@ -11,19 +11,10 @@ Nástroj pro zpracování PDF souborů "Lieferplan", extrakci dat, sledování d
    - Skript pak doinstaluje knihovny a spustí server.
 4. V prohlížeči otevřít `http://localhost:8000`.
 
-### Tichý start bez terminálu (`Intebo LP.vbs`)
-
-Po prvním nastavení můžete místo `start.bat` používat **`Intebo LP.vbs`** — spustí server na pozadí bez terminálového okna a automaticky otevře prohlížeč.
-
-Pro pohodlí: pravým tlačítkem na `Intebo LP.vbs` → **Odeslat → Plocha (vytvořit zástupce)**. Zástupci lze přiřadit ikonu (Vlastnosti → Změnit ikonu).
-
-Server běží na pozadí, dokud nezavřete `python.exe` v Task Manageru nebo nerestartujete PC.
-
-> ⚠️ **Doporučujeme Python 3.12.** Python 3.14 je čerstvý a některé knihovny s ním ještě nefungují spolehlivě.
 
 ## Konfigurace (`config.ini`)
 
-Veškerá konfigurace na jednom místě — bez úprav kódu. Soubor `config.ini` je per-PC (v `.gitignore`), šablona je `config.ini.example`.
+Veškerá konfigurace na jednom místě. Soubor `config.ini` je per-PC (v `.gitignore`), šablona je `config.ini.example`.
 
 ```ini
 [paths]
@@ -39,6 +30,8 @@ port = 8000
 ```
 
 Hodnoty z `config.ini` lze přebít proměnnými prostředí `INTEBO_DATA_DIR`, `INTEBO_HOST`, `INTEBO_PORT` (užitečné pro nasazení jako služba).
+
+Při prvním spuštění start.bat se otevře soubor s configem na změnu data_dir
 
 ## Funkce
 
@@ -85,19 +78,6 @@ python extract_lieferplan.py input.pdf --out extracted.json
 ## Nasazení (Deployment)
 
 Single-process Python (FastAPI) web app. Filesystem-based storage, žádná databáze.
-
-### Možnosti nasazení
-
-| Scénář | Postup |
-|---|---|
-| **Jeden uživatel, jedno PC** | `start.bat`, `data_dir` na lokální cestu. |
-| **Více uživatelů, sdílená data, každý běží lokálně** | `start.bat` na každém PC, `data_dir` na sdílené úložiště (UNC / Google Drive). Pozor: žádné zámky — souběžný zápis může způsobit ztrátu dat. |
-| **Centrální server (doporučeno pro tým)** | Aplikace běží jako služba na serveru (Windows Service / systemd), uživatelé jen otevřou prohlížeč. Bez konfliktů, čistá záloha. |
-
-### Požadavky na server
-
-- Python 3.10–3.13, ~1 GB RAM, ~500 MB disk
-- Síťová dostupnost portu (8000 nebo dle `config.ini`) z klientských PC
 
 ### Data Directory
 

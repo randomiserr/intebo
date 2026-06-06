@@ -1,32 +1,18 @@
 ; ============================================================
 ; Konfigurace aplikace Intebo - SABLONA
-; ============================================================
-; Tento soubor je SABLONA. Pred prvnim spustenim:
-;   1. Zkopirujte tento soubor na "config.ini" (stejna slozka)
-;   2. Upravte hodnoty nize podle prostredi
-;   3. Spustte start.bat
-;
-; Soubor config.ini je v .gitignore (nepushuje se do GitHubu),
-; takze kazdy PC / server muze mit vlastni nastaveni.
-;
-; Radky zacinajici strednikem (;) jsou komentare.
+; Soubor config.ini je v .gitignore
 ; ============================================================
 
 [paths]
 ; Cesta ke slozce s daty (plany, poznamky, inventar).
-; - Lokalni cesta:        data_dir = C:\intebo-data
-; - Sdilena slozka:       data_dir = \\fileserver\intebo-data
-; - Google Drive:         data_dir = G:\My Drive\intebo-data
-; - Prazdne / smazat:     pouzije se vychozi podslozka "data" vedle app.py
+; Pouzivejte UNC cestu (\\server\sdilene)
 ;
-; UPOZORNENI: pouzivejte UNC cestu (\\server\sdilene), ne mapovanou jednotku (Z:\).
 data_dir =
 
 [server]
-; Na jake adrese aplikace posloucha.
-; - localhost  = jen tento pocitac (lokalni rezim)
-; - 0.0.0.0    = vsechny sitove karty (serverovy rezim, pristupne z LAN)
+; - localhost  = jen tento pocitac
+; - 0.0.0.0    = vsechny sitove karty
 host = localhost
 
-; Cislo portu. Vychozi 8000. Pokud je obsazeny, zmente napr. na 8001.
+; Cislo portu
 port = 8000
