@@ -48,6 +48,9 @@ class PlanIndex:
         self._dismissed: List[str] = []
         self._loaded = False
         self._lock = threading.RLock()
+        # Serializes index mutations with their corresponding shared-file write.
+        # Readers only take _lock, so a slow SMB write does not block page loads.
+        self._write_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # Zivotni cyklus
@@ -90,11 +93,12 @@ class PlanIndex:
     def rebuild(self) -> None:
         """Plny sken stromu plans/ -> index v pameti + na disku. Rezerva pro
         pripad, ze se do slozky zapsalo mimo aplikaci."""
-        plans = self._scan_plans()
-        with self._lock:
-            self._plans = plans
-            self._loaded = True
-        self._persist(plans)
+        with self._write_lock:
+            plans = self._scan_plans()
+            with self._lock:
+                self._plans = plans
+                self._loaded = True
+            self._persist(plans)
 
     # ------------------------------------------------------------------ #
     # Cteni (po nacteni bez diskoveho I/O)
@@ -125,16 +129,19 @@ class PlanIndex:
         """Zavolat po ulozeni noveho/prepsaneho planu. `payload` uz mame
         v pameti z extrakce, takze se nic znovu necte z disku."""
         self.ensure_loaded()
-        with self._lock:
-            self._plans[plan_id] = {
-                "plan_key": plan_id,
-                "latest_ts": ts,
-                "uploaded_at": payload.get("uploaded_at", "Unknown"),
-                "data": payload,
-            }
-            snapshot = dict(self._plans)  # konzistentni kopie pod zamkem
-        # Zapis na disk uz mimo zamek (viz load()).
-        self._persist(snapshot)
+        # The write lock covers both snapshot creation and persistence. Without
+        # it, an older request could finish last and overwrite a newer index.
+        with self._write_lock:
+            with self._lock:
+                self._plans[plan_id] = {
+                    "plan_key": plan_id,
+                    "latest_ts": ts,
+                    "uploaded_at": payload.get("uploaded_at", "Unknown"),
+                    "data": payload,
+                }
+                snapshot = dict(self._plans)  # konzistentni kopie pod zamkem
+            # Shared-file I/O stays outside _lock so page reads remain fast.
+            self._persist(snapshot)
 
     def set_inventory(self, inv: dict) -> None:
         self.ensure_loaded()

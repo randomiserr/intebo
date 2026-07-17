@@ -291,7 +291,7 @@ def get_aggregated_items() -> List[Dict]:
                 }
                 items.append(item_obj)
             except Exception as e:
-                print(f"Error processing line in plan {p_dir.name}: {e}")
+                print(f"Error processing line in plan {plan_id}: {e}")
                 continue
             
     # Sort by days to delivery (ascending, None last)
