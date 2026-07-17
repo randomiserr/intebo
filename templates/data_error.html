@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Datová složka není dostupná</title>
+    <style>
+        body { font-family: Segoe UI, Arial, sans-serif; background: #f4f5f7;
+               color: #222; display: flex; min-height: 100vh; margin: 0;
+               align-items: center; justify-content: center; }
+        .card { background: #fff; max-width: 520px; padding: 32px 36px;
+                border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+        h1 { font-size: 20px; margin: 0 0 12px; color: #c0392b; }
+        p { line-height: 1.55; margin: 10px 0; }
+        ol { line-height: 1.6; }
+        .btn { display: inline-block; margin-top: 18px; padding: 10px 20px;
+               background: #2d6cdf; color: #fff; text-decoration: none;
+               border-radius: 6px; font-weight: 600; }
+        .detail { margin-top: 20px; font-size: 12px; color: #888;
+                  word-break: break-all; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Datová složka není dostupná</h1>
+        <p>Aplikace se nemůže dostat ke sdílené složce s daty. Pravděpodobně
+           nejste připojeni do firemní sítě.</p>
+        <ol>
+            <li>Připojte <strong>VPN</strong> do firemní sítě.</li>
+            <li>Ověřte, že je sdílený disk dostupný.</li>
+            <li>Poté klikněte na <em>Zkusit znovu</em>.</li>
+        </ol>
+        <a class="btn" href="/">Zkusit znovu</a>
+        {% if detail %}<div class="detail">Detail: {{ detail }}</div>{% endif %}
+    </div>
+</body>
+</html>
