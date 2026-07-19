@@ -133,6 +133,12 @@ class PlanIndex:
         # it, an older request could finish last and overwrite a newer index.
         with self._write_lock:
             with self._lock:
+                current = self._plans.get(plan_id)
+                if current and str(current.get("latest_ts", "")) > ts:
+                    # Upload timestamps are lexicographically chronological.
+                    # A slower, older request must not replace a newer version
+                    # that has already reached the index.
+                    return
                 self._plans[plan_id] = {
                     "plan_key": plan_id,
                     "latest_ts": ts,
