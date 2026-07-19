@@ -66,6 +66,18 @@ def _init_worker():
         DATA_ERROR = str(exc) or "Datova slozka neni dostupna."
 
 
+def _start_init_worker():
+    """Start one initialization attempt without waiting for shared-folder I/O."""
+    global _init_thread
+    started_here = False
+    with _init_lock:
+        if _init_thread is None or not _init_thread.is_alive():
+            _init_thread = threading.Thread(target=_init_worker, daemon=True)
+            _init_thread.start()
+            started_here = True
+        return _init_thread, started_here
+
+
 def _ensure_data_ready():
     """Vraci None pokud je datova vrstva pripravena, jinak chybovou hlasku.
 
@@ -73,17 +85,10 @@ def _ensure_data_ready():
     volani nelze v Pythonu prerusit, takze dalsi pozadavky se nepokousi
     spustit nove vlakno -- vrati rovnou chybovou stranku, dokud bezici pokus
     neskonci. Po pripojeni VPN se pokus dokonci a dalsi obnoveni uz projde."""
-    global _init_thread
     if state_manager is not None:
         return None
 
-    started_here = False
-    with _init_lock:
-        if _init_thread is None or not _init_thread.is_alive():
-            _init_thread = threading.Thread(target=_init_worker, daemon=True)
-            _init_thread.start()
-            started_here = True
-        t = _init_thread
+    t, started_here = _start_init_worker()
 
     # Jen ten, kdo pokus prave spustil, na nej chvili pocka (aby prvni nacteni
     # stranky rovnou ukazalo data). Ostatni pozadavky se vraci hned.
@@ -107,9 +112,9 @@ def _api_guard():
         raise HTTPException(status_code=503, detail=err)
 
 
-# Pokus o inicializaci uz pri startu. Neuspech neni fatalni -- server nabehne
-# a stranky zobrazi hlasku "pripojte VPN".
-_ensure_data_ready()
+# Spustime inicializaci na pozadi, ale pri importu na ni necekame. Uvicorn tak
+# muze okamzite otevrit port a zobrazit stavovou stranku i pri zaseknutem SMB.
+_start_init_worker()
 
 # Simple regex to make material/filename safe for Windows paths
 SAFE_PATH_RE = re.compile(r"[^A-Za-z0-9_-]+")
