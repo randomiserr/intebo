@@ -282,17 +282,37 @@ class PlanIndex:
 
     def restore_archived_plan(self, plan_id: str) -> bool:
         """Restore an archived plan before a confirmed same-ID overwrite."""
-        entry = self.get_archived(plan_id)
-        if entry is None:
+        source = self.archive_dir / plan_id
+        # Normal active-plan overwrites stop after one path check. In
+        # particular, they must not initialize/scan the complete lazy archive.
+        if not source.is_dir():
             return False
 
         with self._write_lock:
-            source = self.archive_dir / plan_id
             destination = self.plans_dir / plan_id
             if not source.exists():
                 return False
             if destination.exists():
                 raise FileExistsError(f"Active plan directory already exists: {plan_id}")
+
+            # Read only this requested archive entry. The full archive index
+            # can remain unloaded until the user explicitly opens its view.
+            with self._lock:
+                entry = (self._archived or {}).get(plan_id)
+            if entry is None:
+                latest = self._latest_json(source / "extracted")
+                if latest is None:
+                    return False
+                try:
+                    data = self._read_json(latest)
+                except (json.JSONDecodeError, OSError):
+                    return False
+                entry = {
+                    "plan_key": plan_id,
+                    "latest_ts": latest.stem,
+                    "uploaded_at": data.get("uploaded_at", "Unknown"),
+                    "data": data,
+                }
 
             # The archive directory changes, so make its lazy cache rebuild on
             # demand. Do this before the move; failure leaves data untouched.

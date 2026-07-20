@@ -400,10 +400,17 @@ def get_aggregated_items(
     items.sort(key=lambda x: (x["days_to_delivery"] is None, x["days_to_delivery"]))
     return items
 
-def get_safe_id(val: str) -> str:
+def get_safe_id(val: Any) -> str:
     if not val:
         return "Unknown"
-    return SAFE_PATH_RE.sub("_", val).strip("_") or "unknown"
+    return SAFE_PATH_RE.sub("_", str(val)).strip("_") or "unknown"
+
+
+def get_plan_id(payload: Dict) -> str:
+    sa = payload.get("scheduling_agreement_no") or "Unknown"
+    release = payload.get("release_nr") or "Unknown"
+    return f"{get_safe_id(sa)}_AN_{get_safe_id(release)}"
+
 
 def get_plan_dirs(plan_id: str, archived: bool = False):
     root = DATA_DIR / "archive" / "plans" if archived else DATA_DIR / "plans"
@@ -599,10 +606,7 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
 
     try:
         payload = extract_lieferplan(temp_pdf)
-        sa = payload.get("scheduling_agreement_no") or "Unknown"
-        rn = payload.get("release_nr") or "Unknown"
-
-        plan_id = f"{get_safe_id(sa)}_AN_{get_safe_id(rn)}"
+        plan_id = get_plan_id(payload)
 
         # --- Duplicate detection (z indexu v pameti, bez skenovani disku) ---
         dirs = get_plan_dirs(plan_id)
@@ -674,6 +678,12 @@ def confirm_overwrite(req: OverwriteRequest):
 
     try:
         payload = extract_lieferplan(staging_pdf)
+        extracted_plan_id = get_plan_id(payload)
+        if extracted_plan_id != safe_plan_id:
+            raise HTTPException(
+                status_code=400,
+                detail="The staged PDF does not match the confirmed plan.",
+            )
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         now_dt = datetime.now(timezone.utc)
         payload["uploaded_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -699,6 +709,10 @@ def confirm_overwrite(req: OverwriteRequest):
         from fastapi.responses import JSONResponse
         redirect = "/overview" if safe_plan_id in archived else f"/plan/{safe_plan_id}/{ts}"
         return JSONResponse({"redirect": redirect})
+    except HTTPException:
+        if staging_pdf.exists():
+            staging_pdf.unlink()
+        raise
     except Exception as e:
         if staging_pdf.exists(): staging_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
