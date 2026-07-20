@@ -514,7 +514,7 @@
 
         <div class="toggle-container">
             <label class="toggle-label">
-                Zobrazit archivovan&eacute; pl&aacute;ny
+                Archivovan&eacute; pl&aacute;ny
                 <div class="switch">
                     <input type="checkbox" id="toggleArchived" {% if show_archived %}checked{% endif %}
                         onchange="window.location.href = this.checked ? '/overview?show_archived=true' : '/overview'">
@@ -522,7 +522,7 @@
                 </div>
             </label>
             <label class="toggle-label">
-                Zobrazit pouze nezpracované plány
+                Pouze nezpracované plány
                 <div class="switch">
                     <input type="checkbox" id="toggleUnprocessed" onchange="applyFilters()">
                     <span class="slider"></span>
