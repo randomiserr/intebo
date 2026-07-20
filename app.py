@@ -200,7 +200,10 @@ def archive_eligible_plans(manager=None, today=None) -> List[str]:
 _start_init_worker()
 
 
-def get_aggregated_items() -> List[Dict]:
+def get_aggregated_items(
+    plan_entries: Optional[List[Dict]] = None,
+    archived: bool = False,
+) -> List[Dict]:
     """
     Scans all plans, finds the latest version for each SA/Material pair, 
     and aggregates all line items from those latest versions only.
@@ -210,7 +213,8 @@ def get_aggregated_items() -> List[Dict]:
     # Cteme z indexu v pameti (zadne skenovani sitove slozky).
     best_plans = {}
 
-    for pentry in plan_index.plans():
+    entries = plan_entries if plan_entries is not None else plan_index.plans()
+    for pentry in entries:
         data = pentry["data"]
         ts = pentry["latest_ts"]
 
@@ -373,7 +377,8 @@ def get_aggregated_items() -> List[Dict]:
                     "is_ghost": False,
                     "has_ghost": has_ghost,
                     "ghost_qty": ghost_qty,
-                    "ghosts": ghosts # Attach ghosts list here
+                    "ghosts": ghosts, # Attach ghosts list here
+                    "is_archived": archived,
                 }
                 items.append(item_obj)
             except Exception as e:
@@ -389,8 +394,9 @@ def get_safe_id(val: str) -> str:
         return "Unknown"
     return SAFE_PATH_RE.sub("_", val).strip("_") or "unknown"
 
-def get_plan_dirs(plan_id: str):
-    base = DATA_DIR / "plans" / plan_id
+def get_plan_dirs(plan_id: str, archived: bool = False):
+    root = DATA_DIR / "archive" / "plans" if archived else DATA_DIR / "plans"
+    base = root / plan_id
     dirs = {
         "base": base,
         "raw": base / "raw",
@@ -400,7 +406,7 @@ def get_plan_dirs(plan_id: str):
     }
     return dirs
 
-def get_history(sa_no: str) -> List[Dict]:
+def get_history(sa_no: str, include_archived: bool = False) -> List[Dict]:
     """Find all unique versions (different Release Nr) that share the same Scheduling Agreement.
 
     Kazdy plan_id ma jedno release_nr (je soucasti nazvu), takze staci vzit
@@ -409,7 +415,10 @@ def get_history(sa_no: str) -> List[Dict]:
     safe_sa = get_safe_id(sa_no)
     prefix_old = f"SA_{safe_sa}_"
     prefix_new = f"{safe_sa}_AN_"
-    for pentry in plan_index.plans():
+    entries = [(entry, False) for entry in plan_index.plans()]
+    if include_archived:
+        entries += [(entry, True) for entry in plan_index.archived_plans()]
+    for pentry, is_archived in entries:
         name = pentry["plan_key"]
         if not (name.startswith(prefix_old) or name.startswith(prefix_new)):
             continue
@@ -423,7 +432,8 @@ def get_history(sa_no: str) -> List[Dict]:
                 "ts": ts,
                 "release_nr": rn,
                 "uploaded_at": data.get("uploaded_at", "Unknown"),
-                "material_no": data.get("material_no")
+                "material_no": data.get("material_no"),
+                "is_archived": is_archived,
             }
     return sorted(history_map.values(), key=lambda x: x["ts"], reverse=True)
 
@@ -545,18 +555,26 @@ def index(request: Request):
     })
 
 @app.get("/overview")
-def overview(request: Request):
+def overview(request: Request, show_archived: bool = False):
     if _ensure_data_ready():
         return _data_error_page(request)
 
     items = get_aggregated_items()
+    active_items = items
+    if show_archived:
+        items = items + get_aggregated_items(
+            plan_entries=plan_index.archived_plans(),
+            archived=True,
+        )
+        items.sort(key=lambda x: (x["days_to_delivery"] is None, x["days_to_delivery"]))
     # get_aggregated_items uz radky serazuje podle days_to_delivery vzestupne.
-    notifications = get_notifications(items)  # znovu nepocitat agregaci
+    notifications = get_notifications(active_items)  # archiv nema generovat upozorneni
 
     return TEMPLATES.TemplateResponse(request, "overview.html", {
         "items": items,
         "format_num": format_cz_num,
-        "notifications": notifications
+        "notifications": notifications,
+        "show_archived": show_archived,
     })
 
 @app.post("/upload")
@@ -728,18 +746,41 @@ def download(plan_id: str):
 
     return FileResponse(str(raw_pdf_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
 
+
+@app.get("/archive/plan/{plan_id}/download")
+def download_archived(plan_id: str):
+    _api_guard()
+    entry = plan_index.get_archived(plan_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Archived plan not found.")
+    ts = entry["latest_ts"]
+    raw_pdf_path = get_plan_dirs(plan_id, archived=True)["raw"] / f"{ts}.pdf"
+    if not raw_pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Original PDF not found.")
+    return FileResponse(str(raw_pdf_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
+
+
 @app.get("/plan/{plan_id}/{ts}")
 def view_plan(request: Request, plan_id: str, ts: str):
+    return _render_plan(request, plan_id, ts, archived=False)
+
+
+@app.get("/archive/plan/{plan_id}/{ts}")
+def view_archived_plan(request: Request, plan_id: str, ts: str):
+    return _render_plan(request, plan_id, ts, archived=True)
+
+
+def _render_plan(request: Request, plan_id: str, ts: str, archived: bool):
     if _ensure_data_ready():
         return _data_error_page(request)
 
     # Nejcastejsi pripad (nejnovejsi verze) obslouzime z indexu v pameti bez
     # diskoveho I/O; starsi verzi nacteme primo ze souboru (jedno cteni).
-    entry = plan_index.get(plan_id)
+    entry = plan_index.get_archived(plan_id) if archived else plan_index.get(plan_id)
     if entry and entry["latest_ts"] == ts:
         payload = copy.deepcopy(entry["data"])  # kopie, at nemutujeme cache
     else:
-        target = get_plan_dirs(plan_id)["extracted"] / f"{ts}.json"
+        target = get_plan_dirs(plan_id, archived=archived)["extracted"] / f"{ts}.json"
         if not target.exists():
             raise HTTPException(status_code=404, detail=f"Version {ts} not found")
         payload = _load_json(target)
@@ -866,7 +907,7 @@ def view_plan(request: Request, plan_id: str, ts: str):
     
     # Get history for changelog
     sa_no = payload.get("scheduling_agreement_no", "")
-    history = get_history(sa_no)
+    history = get_history(sa_no, include_archived=archived)
 
     # Load Inventory Data (z indexu v pameti, bez diskoveho I/O)
     nadvyroba_qty = None
@@ -907,7 +948,8 @@ def view_plan(request: Request, plan_id: str, ts: str):
         "format_num": format_cz_num,
         "today": datetime.now().date(),
         "nadvyroba_qty": nadvyroba_qty,
-        "inventory_uploaded_at": inventory_uploaded_at
+        "inventory_uploaded_at": inventory_uploaded_at,
+        "archived": archived,
     })
 
 class ToggleRowRequest(BaseModel):

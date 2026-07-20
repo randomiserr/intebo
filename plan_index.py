@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 INDEX_FILENAME = "_index.json"
+ARCHIVE_INDEX_FILENAME = "_archive_index.json"
 INDEX_SCHEMA_VERSION = 1
 
 
@@ -44,7 +45,9 @@ class PlanIndex:
         self.plans_dir = self.data_dir / "plans"
         self.archive_dir = self.data_dir / "archive" / "plans"
         self.index_file = self.data_dir / INDEX_FILENAME
+        self.archive_index_file = self.data_dir / ARCHIVE_INDEX_FILENAME
         self._plans: Dict[str, dict] = {}
+        self._archived: Optional[Dict[str, dict]] = None
         self._inventory: Optional[dict] = None
         self._dismissed: List[str] = []
         self._loaded = False
@@ -114,6 +117,30 @@ class PlanIndex:
         with self._lock:
             return self._plans.get(plan_id)
 
+    def archived_plans(self) -> List[dict]:
+        """Load archived metadata only when the archive view is requested."""
+        self.ensure_loaded()
+        with self._write_lock:
+            with self._lock:
+                if self._archived is not None:
+                    return list(self._archived.values())
+
+            payload = self._read_json_or(self.archive_index_file, None)
+            if payload and payload.get("schema") == INDEX_SCHEMA_VERSION:
+                archived = payload.get("plans", {})
+            else:
+                archived = self._scan_plans_dir(self.archive_dir)
+                self._persist_archive(archived)
+
+            with self._lock:
+                self._archived = archived
+                return list(archived.values())
+
+    def get_archived(self, plan_id: str) -> Optional[dict]:
+        self.archived_plans()
+        with self._lock:
+            return (self._archived or {}).get(plan_id)
+
     def inventory(self) -> Optional[dict]:
         self.ensure_loaded()
         return self._inventory
@@ -173,6 +200,13 @@ class PlanIndex:
 
             if not entries:
                 return []
+
+            # The archive index is a lazy secondary cache. Mark it invalid
+            # before changing directories so normal startup never has to read
+            # it, while the next explicit archive view rebuilds complete data.
+            self._atomic_write_json(self.archive_index_file, {"schema": 0})
+            with self._lock:
+                self._archived = None
 
             self.archive_dir.mkdir(parents=True, exist_ok=True)
             archived: List[str] = []
@@ -239,12 +273,15 @@ class PlanIndex:
     # Interni
     # ------------------------------------------------------------------ #
     def _scan_plans(self) -> Dict[str, dict]:
+        return self._scan_plans_dir(self.plans_dir)
+
+    def _scan_plans_dir(self, plans_dir: Path) -> Dict[str, dict]:
         plans: Dict[str, dict] = {}
-        if not self.plans_dir.exists():
+        if not plans_dir.exists():
             return plans
         # os.scandir vraci mtime/typ primo z vypisu adresare (bez extra
         # sitoveho dotazu na kazdy soubor, na rozdil od pathlib.glob+stat).
-        with os.scandir(self.plans_dir) as it:
+        with os.scandir(plans_dir) as it:
             for entry in it:
                 if not entry.is_dir():
                     continue
@@ -283,6 +320,10 @@ class PlanIndex:
         """Zapis indexu na disk. Vola se mimo `_lock` (dostane snapshot plans)."""
         payload = {"schema": INDEX_SCHEMA_VERSION, "plans": plans}
         self._atomic_write_json(self.index_file, payload)
+
+    def _persist_archive(self, plans: Dict[str, dict]) -> None:
+        payload = {"schema": INDEX_SCHEMA_VERSION, "plans": plans}
+        self._atomic_write_json(self.archive_index_file, payload)
 
     # ------------------------------------------------------------------ #
     # I/O helpery
