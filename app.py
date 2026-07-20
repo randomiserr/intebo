@@ -1,7 +1,7 @@
 import json
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +39,7 @@ notes_manager = None       # type: ignore[assignment]
 DATA_ERROR = None          # posledni chyba pri pristupu k datove slozce (str)
 
 INIT_TIMEOUT_SECONDS = 15   # jak dlouho ceka PRVNI pozadavek na nacteni
+ARCHIVE_AFTER_DAYS = 30
 
 _init_lock = threading.Lock()
 _init_thread = None        # type: ignore[assignment]  # bezici pokus o inicializaci
@@ -119,6 +120,46 @@ _start_init_worker()
 # Simple regex to make material/filename safe for Windows paths
 SAFE_PATH_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
+
+def is_archived_plan(pentry: Dict, today=None) -> bool:
+    """Return True when a plan no longer belongs in the active views.
+
+    A plan is archived only when every row in its latest version is marked as
+    processed and its latest delivery date is more than 30 days old. Missing
+    rows, invalid dates/quantities, or unavailable state fail safe: the plan
+    remains visible.
+    """
+    if state_manager is None:
+        return False
+
+    data = pentry.get("data") or {}
+    lines = data.get("lines") or []
+    if not lines:
+        return False
+
+    sa_no = str(data.get("scheduling_agreement_no", "")).strip()
+    mat_no = str(data.get("material_no", "")).strip()
+    if not sa_no or not mat_no:
+        return False
+
+    latest_delivery = None
+    for line in lines:
+        try:
+            delivery_date = str(line["delivery_date"])
+            parsed_date = datetime.strptime(delivery_date, "%Y-%m-%d").date()
+            quantity = float(line["order_quantity"])
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        if not state_manager.get_state(sa_no, mat_no, delivery_date, quantity):
+            return False
+        if latest_delivery is None or parsed_date > latest_delivery:
+            latest_delivery = parsed_date
+
+    today = today or datetime.now().date()
+    return latest_delivery < today - timedelta(days=ARCHIVE_AFTER_DAYS)
+
+
 def get_aggregated_items() -> List[Dict]:
     """
     Scans all plans, finds the latest version for each SA/Material pair, 
@@ -174,6 +215,11 @@ def get_aggregated_items() -> List[Dict]:
 
     # 2. Process only the best plans
     for entry in best_plans.values():
+        # Archivaci posuzujeme az po vyberu nejnovejsi release. Jinak by se
+        # po skryti zpracovaneho release mohl znovu zobrazit starsi release.
+        if is_archived_plan(entry, today=today):
+            continue
+
         data = entry['data']
 
         sa_no = entry['sa']
@@ -447,6 +493,7 @@ def index(request: Request):
     plans = [
         {"plan_key": p["plan_key"], "uploaded_at": p.get("uploaded_at", "Unknown")}
         for p in plan_index.plans()
+        if not is_archived_plan(p)
     ]
     # Sort plans by uploaded_at descending
     plans = sorted(plans, key=lambda x: x["uploaded_at"], reverse=True)
