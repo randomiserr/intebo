@@ -778,7 +778,13 @@
                     document.querySelectorAll('.filter-dropdown').forEach(d => d.classList.remove('show'));
                 }
             });
+            // Browsers may restore checkbox state during a reload. Apply that
+            // restored state immediately instead of waiting for a change event.
+            applyFilters();
         });
+
+        // Also covers restoration from the browser back/forward cache.
+        window.addEventListener('pageshow', applyFilters);
 
         function populateFilterOptions(colIndex) {
             const rows = document.querySelectorAll('.item-row');
