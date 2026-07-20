@@ -42,6 +42,7 @@ class PlanIndex:
     def __init__(self, data_dir: Path):
         self.data_dir = Path(data_dir)
         self.plans_dir = self.data_dir / "plans"
+        self.archive_dir = self.data_dir / "archive" / "plans"
         self.index_file = self.data_dir / INDEX_FILENAME
         self._plans: Dict[str, dict] = {}
         self._inventory: Optional[dict] = None
@@ -148,6 +149,82 @@ class PlanIndex:
                 snapshot = dict(self._plans)  # konzistentni kopie pod zamkem
             # Shared-file I/O stays outside _lock so page reads remain fast.
             self._persist(snapshot)
+
+    def archive_plans(self, plan_ids: List[str]) -> List[str]:
+        """Move plans out of the active tree and remove them from the index.
+
+        The directories are renamed on the same shared volume, so their PDFs
+        and JSON history stay intact without being read or copied over VPN.
+        The index is written once for the whole batch. If that write fails,
+        directory moves and the in-memory index are rolled back.
+        """
+        self.ensure_loaded()
+        requested = list(dict.fromkeys(plan_ids))
+        if not requested:
+            return []
+
+        with self._write_lock:
+            with self._lock:
+                entries = {
+                    plan_id: self._plans[plan_id]
+                    for plan_id in requested
+                    if plan_id in self._plans
+                }
+
+            if not entries:
+                return []
+
+            self.archive_dir.mkdir(parents=True, exist_ok=True)
+            archived: List[str] = []
+            moved: List[str] = []
+
+            try:
+                for plan_id in entries:
+                    source = self.plans_dir / plan_id
+                    destination = self.archive_dir / plan_id
+
+                    if source.exists():
+                        # Never merge/overwrite an existing archive directory.
+                        # Keeping the active plan is safer than losing history.
+                        if destination.exists():
+                            continue
+                        os.replace(source, destination)
+                        moved.append(plan_id)
+                        archived.append(plan_id)
+                    elif destination.exists():
+                        # Recovery from an interrupted previous archive where
+                        # the directory move succeeded but index persistence did not.
+                        archived.append(plan_id)
+
+                if not archived:
+                    return []
+
+                with self._lock:
+                    for plan_id in archived:
+                        self._plans.pop(plan_id, None)
+                    snapshot = dict(self._plans)
+
+                try:
+                    self._persist(snapshot)
+                except Exception:
+                    for plan_id in reversed(moved):
+                        os.replace(
+                            self.archive_dir / plan_id,
+                            self.plans_dir / plan_id,
+                        )
+                    with self._lock:
+                        self._plans.update(entries)
+                    raise
+            except Exception:
+                # Fail-safe for a directory move error before index mutation.
+                for plan_id in reversed(moved):
+                    destination = self.archive_dir / plan_id
+                    source = self.plans_dir / plan_id
+                    if destination.exists() and not source.exists():
+                        os.replace(destination, source)
+                raise
+
+            return archived
 
     def set_inventory(self, inv: dict) -> None:
         self.ensure_loaded()

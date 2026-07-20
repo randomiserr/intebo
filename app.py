@@ -51,6 +51,7 @@ def _init_data():
     sm = StateManager(DATA_DIR)
     nm = NotesManager(DATA_DIR)
     plan_index.load()
+    archive_eligible_plans(sm)
     return sm, nm
 
 
@@ -113,23 +114,20 @@ def _api_guard():
         raise HTTPException(status_code=503, detail=err)
 
 
-# Spustime inicializaci na pozadi, ale pri importu na ni necekame. Uvicorn tak
-# muze okamzite otevrit port a zobrazit stavovou stranku i pri zaseknutem SMB.
-_start_init_worker()
-
 # Simple regex to make material/filename safe for Windows paths
 SAFE_PATH_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
-def is_archived_plan(pentry: Dict, today=None) -> bool:
-    """Return True when a plan no longer belongs in the active views.
+def should_archive_plan(pentry: Dict, today=None, manager=None) -> bool:
+    """Return True when a plan satisfies the 30-day archive rule.
 
     A plan is archived only when every row in its latest version is marked as
     processed and its latest delivery date is more than 30 days old. Missing
     rows, invalid dates/quantities, or unavailable state fail safe: the plan
     remains visible.
     """
-    if state_manager is None:
+    manager = manager or state_manager
+    if manager is None:
         return False
 
     data = pentry.get("data") or {}
@@ -151,13 +149,55 @@ def is_archived_plan(pentry: Dict, today=None) -> bool:
         except (KeyError, TypeError, ValueError):
             return False
 
-        if not state_manager.get_state(sa_no, mat_no, delivery_date, quantity):
+        if not manager.get_state(sa_no, mat_no, delivery_date, quantity):
             return False
         if latest_delivery is None or parsed_date > latest_delivery:
             latest_delivery = parsed_date
 
     today = today or datetime.now().date()
     return latest_delivery < today - timedelta(days=ARCHIVE_AFTER_DAYS)
+
+
+def archive_eligible_plans(manager=None, today=None) -> List[str]:
+    """Physically archive completed, old plan groups in one index write.
+
+    Eligibility is decided from the newest release for each agreement/material.
+    When that release is eligible, all superseded releases in the same group
+    are archived too, so an older release cannot reappear on the dashboard.
+    """
+    manager = manager or state_manager
+    if manager is None:
+        return []
+
+    grouped = {}
+    for pentry in plan_index.plans():
+        data = pentry.get("data") or {}
+        key = (
+            str(data.get("scheduling_agreement_no", "")).strip(),
+            str(data.get("material_no", "")).strip(),
+        )
+        try:
+            release = int(str(data.get("release_nr", "")).strip())
+        except (TypeError, ValueError):
+            release = -1
+        rank = (release, str(pentry.get("latest_ts", "")))
+        group = grouped.setdefault(key, {"entries": [], "best": None, "rank": None})
+        group["entries"].append(pentry)
+        if group["rank"] is None or rank > group["rank"]:
+            group["best"] = pentry
+            group["rank"] = rank
+
+    plan_ids = []
+    for group in grouped.values():
+        if should_archive_plan(group["best"], today=today, manager=manager):
+            plan_ids.extend(entry["plan_key"] for entry in group["entries"])
+    return plan_index.archive_plans(plan_ids)
+
+
+# Spustime inicializaci na pozadi, ale pri importu na ni necekame. Uvicorn tak
+# muze okamzite otevrit port a zobrazit stavovou stranku i pri zaseknutem SMB.
+# Funkce pro jednorazovou archivaci jsou uz v tomto okamziku definovane.
+_start_init_worker()
 
 
 def get_aggregated_items() -> List[Dict]:
@@ -215,11 +255,6 @@ def get_aggregated_items() -> List[Dict]:
 
     # 2. Process only the best plans
     for entry in best_plans.values():
-        # Archivaci posuzujeme az po vyberu nejnovejsi release. Jinak by se
-        # po skryti zpracovaneho release mohl znovu zobrazit starsi release.
-        if is_archived_plan(entry, today=today):
-            continue
-
         data = entry['data']
 
         sa_no = entry['sa']
@@ -493,7 +528,6 @@ def index(request: Request):
     plans = [
         {"plan_key": p["plan_key"], "uploaded_at": p.get("uploaded_at", "Unknown")}
         for p in plan_index.plans()
-        if not is_archived_plan(p)
     ]
     # Sort plans by uploaded_at descending
     plans = sorted(plans, key=lambda x: x["uploaded_at"], reverse=True)
@@ -572,9 +606,11 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
             json.dump(payload, f, indent=2)
 
         plan_index.upsert_plan(plan_id, payload, ts)
+        archived = archive_eligible_plans()
 
         from fastapi.responses import JSONResponse
-        return JSONResponse({"exists": False, "redirect": f"/plan/{plan_id}/{ts}"})
+        redirect = "/overview" if plan_id in archived else f"/plan/{plan_id}/{ts}"
+        return JSONResponse({"exists": False, "redirect": redirect})
     except Exception as e:
         if temp_pdf.exists(): temp_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
@@ -621,9 +657,11 @@ def confirm_overwrite(req: OverwriteRequest):
             json.dump(payload, f, indent=2)
 
         plan_index.upsert_plan(safe_plan_id, payload, ts)
+        archived = archive_eligible_plans()
 
         from fastapi.responses import JSONResponse
-        return JSONResponse({"redirect": f"/plan/{safe_plan_id}/{ts}"})
+        redirect = "/overview" if safe_plan_id in archived else f"/plan/{safe_plan_id}/{ts}"
+        return JSONResponse({"redirect": redirect})
     except Exception as e:
         if staging_pdf.exists(): staging_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
@@ -884,7 +922,8 @@ def toggle_row(req: ToggleRowRequest):
     _api_guard()
     try:
         state_manager.set_state(req.sa_no, req.material, req.date, req.quantity, req.state)
-        return {"status": "ok", "new_state": req.state}
+        archived = archive_eligible_plans()
+        return {"status": "ok", "new_state": req.state, "archived": archived}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -929,6 +968,11 @@ def rebuild_index():
     _api_guard()
     try:
         plan_index.rebuild()
-        return {"status": "ok", "plans": len(plan_index.plans())}
+        archived = archive_eligible_plans()
+        return {
+            "status": "ok",
+            "plans": len(plan_index.plans()),
+            "archived": archived,
+        }
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
