@@ -1,7 +1,7 @@
 import json
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,9 +14,12 @@ from extract_lieferplan import extract_lieferplan
 from state_manager import StateManager
 from inventory_parser import parse_inventory_xlsx
 from notes_manager import NotesManager
+from plan_index import PlanIndex
 from pydantic import BaseModel
 
+import copy
 import os
+import threading
 import config
 
 app = FastAPI()
@@ -25,95 +28,255 @@ DATA_DIR = config.DATA_DIR
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "templates")), name="static")
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+# --- Datova vrstva ---------------------------------------------------------
+# Cely pristup k (obvykle sitove) datove slozce jde pres tyto tri objekty.
+# Inicializace bezi v jednom vlakne na pozadi (single-flight), aby se server
+# pri nedostupnem/zaseknutem sharu nezasekl pri startu (jinak by se prohlizec
+# nikdy neotevrel) a aby zaseknuty pokus nespoustel dalsi vlakna.
+plan_index = PlanIndex(DATA_DIR)
+state_manager = None       # type: ignore[assignment]  # != None => datova vrstva pripravena
+notes_manager = None       # type: ignore[assignment]
+DATA_ERROR = None          # posledni chyba pri pristupu k datove slozce (str)
 
-state_manager = StateManager(DATA_DIR)
-notes_manager = NotesManager(DATA_DIR)
+INIT_TIMEOUT_SECONDS = 15   # jak dlouho ceka PRVNI pozadavek na nacteni
+ARCHIVE_AFTER_DAYS = 30
+
+_init_lock = threading.Lock()
+_init_thread = None        # type: ignore[assignment]  # bezici pokus o inicializaci
+
+
+def _init_data():
+    """Priprava datove vrstvy (blokujici I/O na share). Bezi v _init_worker."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    sm = StateManager(DATA_DIR)
+    nm = NotesManager(DATA_DIR)
+    plan_index.load()
+    archive_eligible_plans(sm)
+    return sm, nm
+
+
+def _init_worker():
+    """Jeden pokus o inicializaci. Pri uspechu zverejni managery (posledni
+    se nastavuje state_manager -- to je priznak, ze je vse pripravene)."""
+    global state_manager, notes_manager, DATA_ERROR
+    try:
+        sm, nm = _init_data()
+        notes_manager = nm
+        DATA_ERROR = None
+        state_manager = sm          # signal 'ready' az uplne nakonec
+    except Exception as exc:  # noqa: BLE001
+        DATA_ERROR = str(exc) or "Datova slozka neni dostupna."
+
+
+def _start_init_worker():
+    """Start one initialization attempt without waiting for shared-folder I/O."""
+    global _init_thread
+    started_here = False
+    with _init_lock:
+        if _init_thread is None or not _init_thread.is_alive():
+            _init_thread = threading.Thread(target=_init_worker, daemon=True)
+            _init_thread.start()
+            started_here = True
+        return _init_thread, started_here
+
+
+def _ensure_data_ready():
+    """Vraci None pokud je datova vrstva pripravena, jinak chybovou hlasku.
+
+    Single-flight: naráz bezi max. jeden pokus o inicializaci. Zaseknute SMB
+    volani nelze v Pythonu prerusit, takze dalsi pozadavky se nepokousi
+    spustit nove vlakno -- vrati rovnou chybovou stranku, dokud bezici pokus
+    neskonci. Po pripojeni VPN se pokus dokonci a dalsi obnoveni uz projde."""
+    if state_manager is not None:
+        return None
+
+    t, started_here = _start_init_worker()
+
+    # Jen ten, kdo pokus prave spustil, na nej chvili pocka (aby prvni nacteni
+    # stranky rovnou ukazalo data). Ostatni pozadavky se vraci hned.
+    if started_here:
+        t.join(INIT_TIMEOUT_SECONDS)
+
+    if state_manager is not None:
+        return None
+    return DATA_ERROR or "Datova slozka se nacita, zkuste to za chvili."
+
+
+def _data_error_page(request: Request):
+    return TEMPLATES.TemplateResponse(
+        request, "data_error.html", {"detail": DATA_ERROR}, status_code=503
+    )
+
+
+def _api_guard():
+    err = _ensure_data_ready()
+    if err:
+        raise HTTPException(status_code=503, detail=err)
+
 
 # Simple regex to make material/filename safe for Windows paths
 SAFE_PATH_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
-def get_aggregated_items() -> List[Dict]:
+
+def should_archive_plan(pentry: Dict, today=None, manager=None) -> bool:
+    """Return True when a plan satisfies the 30-day archive rule.
+
+    A plan is archived only when every row in its latest version is marked as
+    processed and its latest delivery date is more than 30 days old. Missing
+    rows, invalid dates/quantities, or unavailable state fail safe: the plan
+    remains visible.
+    """
+    manager = manager or state_manager
+    if manager is None:
+        return False
+
+    data = pentry.get("data") or {}
+    lines = data.get("lines") or []
+    if not lines:
+        return False
+
+    sa_no = str(data.get("scheduling_agreement_no", "")).strip()
+    mat_no = str(data.get("material_no", "")).strip()
+    if not sa_no or not mat_no:
+        return False
+
+    latest_delivery = None
+    for line in lines:
+        try:
+            delivery_date = str(line["delivery_date"])
+            parsed_date = datetime.strptime(delivery_date, "%Y-%m-%d").date()
+            quantity = float(line["order_quantity"])
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        if not manager.get_state(sa_no, mat_no, delivery_date, quantity):
+            return False
+        if latest_delivery is None or parsed_date > latest_delivery:
+            latest_delivery = parsed_date
+
+    today = today or datetime.now().date()
+    return latest_delivery < today - timedelta(days=ARCHIVE_AFTER_DAYS)
+
+
+def archive_eligible_plans(manager=None, today=None) -> List[str]:
+    """Physically archive completed, old plan groups in one index write.
+
+    Eligibility is decided from the newest release for each agreement/material.
+    When that release is eligible, all superseded releases in the same group
+    are archived too, so an older release cannot reappear on the dashboard.
+    """
+    manager = manager or state_manager
+    if manager is None:
+        return []
+
+    grouped = {}
+    for pentry in plan_index.plans():
+        data = pentry.get("data") or {}
+        key = (
+            str(data.get("scheduling_agreement_no", "")).strip(),
+            str(data.get("material_no", "")).strip(),
+        )
+        release_raw = str(data.get("release_nr", "")).strip()
+        try:
+            release = int(release_raw)
+            release_valid = release >= 0
+        except (TypeError, ValueError):
+            release = -1
+            release_valid = False
+        rank = (release, str(pentry.get("latest_ts", "")))
+        group = grouped.setdefault(
+            key,
+            {"entries": [], "best": None, "rank": None, "valid_releases": True},
+        )
+        group["entries"].append(pentry)
+        group["valid_releases"] = group["valid_releases"] and release_valid
+        if group["rank"] is None or rank > group["rank"]:
+            group["best"] = pentry
+            group["rank"] = rank
+
+    plan_ids = []
+    for group in grouped.values():
+        # If any release is malformed we cannot safely establish which one is
+        # newest, so keep the whole group active instead of risking data loss.
+        if group["valid_releases"] and should_archive_plan(
+            group["best"], today=today, manager=manager
+        ):
+            plan_ids.extend(entry["plan_key"] for entry in group["entries"])
+    return plan_index.archive_plans(plan_ids)
+
+
+# Spustime inicializaci na pozadi, ale pri importu na ni necekame. Uvicorn tak
+# muze okamzite otevrit port a zobrazit stavovou stranku i pri zaseknutem SMB.
+# Funkce pro jednorazovou archivaci jsou uz v tomto okamziku definovane.
+_start_init_worker()
+
+
+def get_aggregated_items(
+    plan_entries: Optional[List[Dict]] = None,
+    archived: bool = False,
+) -> List[Dict]:
     """
     Scans all plans, finds the latest version for each SA/Material pair, 
     and aggregates all line items from those latest versions only.
     Items with ghosts are returned as a single object containing 'ghosts' list.
     """
-    plans_dir = DATA_DIR / "plans"
-    if not plans_dir.exists():
-        return []
-
-    # 1. Collect and filter plans: (sa, mat) -> Best Plan
+    # 1. Collect and filter plans: (sa, mat) -> Best Plan.
+    # Cteme z indexu v pameti (zadne skenovani sitove slozky).
     best_plans = {}
-    
-    for p_dir in plans_dir.iterdir():
-        if not p_dir.is_dir(): continue
-        ext_dir = p_dir / "extracted"
-        if not ext_dir.exists(): continue
-        files = sorted(ext_dir.glob("*.json"))
-        if not files: continue
-        
-        latest_file = files[-1]
+
+    entries = plan_entries if plan_entries is not None else plan_index.plans()
+    for pentry in entries:
+        data = pentry["data"]
+        ts = pentry["latest_ts"]
+
+        sa = str(data.get("scheduling_agreement_no", "Unknown")).strip()
+        mat = str(data.get("material_no", "Unknown")).strip()
+        rel = data.get("release_nr", "0")
+
+        # Key used for grouping
+        key = (sa, mat)
+
+        # Parse release number safely
         try:
-            with open(latest_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            sa = str(data.get("scheduling_agreement_no", "Unknown")).strip()
-            mat = str(data.get("material_no", "Unknown")).strip()
-            rel = data.get("release_nr", "0")
-            
-            # Key used for grouping
-            key = (sa, mat)
-            
-            # Parse release number safely
-            try:
-                rel_val = int(str(rel).strip())
-            except (ValueError, TypeError):
-                rel_val = -1
-                
-            current_best = best_plans.get(key)
-            is_better = False
-            
-            if not current_best:
+            rel_val = int(str(rel).strip())
+        except (ValueError, TypeError):
+            rel_val = -1
+
+        current_best = best_plans.get(key)
+        is_better = False
+
+        if not current_best:
+            is_better = True
+        elif rel_val > current_best['rel_val']:
+            is_better = True
+        elif rel_val == current_best['rel_val']:
+            # Tie-breaker: timestamp (nazev ts je serazitelny chronologicky)
+            if ts > current_best['ts']:
                 is_better = True
-            else:
-                # Compare release numbers
-                if rel_val > current_best['rel_val']:
-                    is_better = True
-                elif rel_val == current_best['rel_val']:
-                    # Tie-breaker: timestamp
-                    if latest_file.stat().st_mtime > current_best['ts_val']:
-                        is_better = True
-            
-            if is_better:
-                best_plans[key] = {
-                    'dir': p_dir,
-                    'file': latest_file,
-                    'data': data,
-                    'rel_val': rel_val,
-                    'ts_val': latest_file.stat().st_mtime,
-                    'sa': sa,
-                    'mat': mat,
-                    'rel': rel # original string
-                }
-        except Exception as e:
-            print(f"Skipping plan {p_dir}: {e}")
-            continue
+
+        if is_better:
+            best_plans[key] = {
+                'plan_key': pentry["plan_key"],
+                'ts': ts,
+                'data': data,
+                'rel_val': rel_val,
+                'sa': sa,
+                'mat': mat,
+                'rel': rel  # original string
+            }
 
     items = []
     today = datetime.now().date()
 
     # 2. Process only the best plans
     for entry in best_plans.values():
-        p_dir = entry['dir']
-        latest_file = entry['file']
         data = entry['data']
-        
+
         sa_no = entry['sa']
         mat_no = entry['mat']
         rel_nr = entry['rel']
-        plan_id = p_dir.name
-        ts = latest_file.stem
+        plan_id = entry['plan_key']
+        ts = entry['ts']
         
         # --- GHOST ROWS LOGIC START ---
         # 1. Identify all (date, qty) present in the *current* plan
@@ -225,24 +388,33 @@ def get_aggregated_items() -> List[Dict]:
                     "is_ghost": False,
                     "has_ghost": has_ghost,
                     "ghost_qty": ghost_qty,
-                    "ghosts": ghosts # Attach ghosts list here
+                    "ghosts": ghosts, # Attach ghosts list here
+                    "is_archived": archived,
                 }
                 items.append(item_obj)
             except Exception as e:
-                print(f"Error processing line in plan {p_dir.name}: {e}")
+                print(f"Error processing line in plan {plan_id}: {e}")
                 continue
             
     # Sort by days to delivery (ascending, None last)
     items.sort(key=lambda x: (x["days_to_delivery"] is None, x["days_to_delivery"]))
     return items
 
-def get_safe_id(val: str) -> str:
+def get_safe_id(val: Any) -> str:
     if not val:
         return "Unknown"
-    return SAFE_PATH_RE.sub("_", val).strip("_") or "unknown"
+    return SAFE_PATH_RE.sub("_", str(val)).strip("_") or "unknown"
 
-def get_plan_dirs(plan_id: str):
-    base = DATA_DIR / "plans" / plan_id
+
+def get_plan_id(payload: Dict) -> str:
+    sa = payload.get("scheduling_agreement_no") or "Unknown"
+    release = payload.get("release_nr") or "Unknown"
+    return f"{get_safe_id(sa)}_AN_{get_safe_id(release)}"
+
+
+def get_plan_dirs(plan_id: str, archived: bool = False):
+    root = DATA_DIR / "archive" / "plans" if archived else DATA_DIR / "plans"
+    base = root / plan_id
     dirs = {
         "base": base,
         "raw": base / "raw",
@@ -252,36 +424,35 @@ def get_plan_dirs(plan_id: str):
     }
     return dirs
 
-def get_history(sa_no: str) -> List[Dict]:
-    """Find all unique versions (different Release Nr) that share the same Scheduling Agreement."""
+def get_history(sa_no: str, include_archived: bool = False) -> List[Dict]:
+    """Find all unique versions (different Release Nr) that share the same Scheduling Agreement.
+
+    Kazdy plan_id ma jedno release_nr (je soucasti nazvu), takze staci vzit
+    nejnovejsi verzi kazdeho odpovidajiciho planu z indexu -- bez skenovani."""
     history_map = {}
-    plans_dir = DATA_DIR / "plans"
-    if not plans_dir.exists():
-        return []
-    
     safe_sa = get_safe_id(sa_no)
     prefix_old = f"SA_{safe_sa}_"
     prefix_new = f"{safe_sa}_AN_"
-    for p_dir in plans_dir.iterdir():
-        if p_dir.is_dir() and (p_dir.name.startswith(prefix_old) or p_dir.name.startswith(prefix_new)):
-            ext_dir = p_dir / "extracted"
-            if ext_dir.exists():
-                for f in ext_dir.glob("*.json"):
-                    try:
-                        data = _load_json(f)
-                        rn = data.get("release_nr", "Unknown")
-                        ts = f.stem
-                        # Keep newest per release nr
-                        if rn not in history_map or ts > history_map[rn]["ts"]:
-                            history_map[rn] = {
-                                "plan_id": p_dir.name,
-                                "ts": ts,
-                                "release_nr": rn,
-                                "uploaded_at": data.get("uploaded_at", "Unknown"),
-                                "material_no": data.get("material_no")
-                            }
-                    except (json.JSONDecodeError, KeyError, OSError):
-                        continue
+    entries = [(entry, False) for entry in plan_index.plans()]
+    if include_archived:
+        entries += [(entry, True) for entry in plan_index.archived_plans()]
+    for pentry, is_archived in entries:
+        name = pentry["plan_key"]
+        if not (name.startswith(prefix_old) or name.startswith(prefix_new)):
+            continue
+        data = pentry["data"]
+        rn = data.get("release_nr", "Unknown")
+        ts = pentry["latest_ts"]
+        # Keep newest per release nr
+        if rn not in history_map or ts > history_map[rn]["ts"]:
+            history_map[rn] = {
+                "plan_id": name,
+                "ts": ts,
+                "release_nr": rn,
+                "uploaded_at": data.get("uploaded_at", "Unknown"),
+                "material_no": data.get("material_no"),
+                "is_archived": is_archived,
+            }
     return sorted(history_map.values(), key=lambda x: x["ts"], reverse=True)
 
 def format_cz_num(val: Any) -> str:
@@ -304,20 +475,17 @@ class DismissRequest(BaseModel):
     notif_id: str
 
 def load_dismissed():
-    if not DISMISSED_FILE.exists():
-        return []
-    try:
-        with open(DISMISSED_FILE, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError, OSError):
-        return []
+    # Cteno z indexu v pameti (obnoveno pri startu / po zapisu).
+    return plan_index.dismissed()
 
 def save_dismissed(dismissed_list):
+    plan_index.set_dismissed(dismissed_list)
     with open(DISMISSED_FILE, "w") as f:
         json.dump(dismissed_list, f)
 
-def get_notifications():
-    items = get_aggregated_items()
+def get_notifications(items=None):
+    if items is None:
+        items = get_aggregated_items()
     dismissed = set(load_dismissed())
     notifs = []
     
@@ -373,6 +541,7 @@ def get_notifications():
 
 @app.post("/api/dismiss-notification")
 def dismiss_notification_endpoint(req: DismissRequest):
+    _api_guard()
     dismissed = load_dismissed()
     if req.notif_id not in dismissed:
         dismissed.append(req.notif_id)
@@ -381,39 +550,21 @@ def dismiss_notification_endpoint(req: DismissRequest):
 
 @app.get("/")
 def index(request: Request):
-    plans_dir = DATA_DIR / "plans"
-    plans = []
-    if plans_dir.exists():
-        for p_dir in plans_dir.iterdir():
-            if p_dir.is_dir():
-                ext_dir = p_dir / "extracted"
-                uploaded_at = "Unknown"
-                if ext_dir.exists():
-                    files = sorted(ext_dir.glob("*.json"))
-                    if files:
-                        try:
-                            data = _load_json(files[-1])
-                            uploaded_at = data.get("uploaded_at", "Unknown")
-                        except (json.JSONDecodeError, KeyError, OSError): pass
-                plans.append({
-                    "plan_key": p_dir.name,
-                    "uploaded_at": uploaded_at
-                })
+    if _ensure_data_ready():
+        return _data_error_page(request)
+
+    plans = [
+        {"plan_key": p["plan_key"], "uploaded_at": p.get("uploaded_at", "Unknown")}
+        for p in plan_index.plans()
+    ]
     # Sort plans by uploaded_at descending
     plans = sorted(plans, key=lambda x: x["uploaded_at"], reverse=True)
-    
+
     notifications = get_notifications()
 
-    # Get inventory uploaded_at
-    inventory_uploaded_at = None
-    inventory_path = DATA_DIR / "inventory.json"
-    if inventory_path.exists():
-        try:
-            with open(inventory_path, "r", encoding="utf-8") as f:
-                inv_data = json.load(f)
-                inventory_uploaded_at = inv_data.get("uploaded_at")
-        except (json.JSONDecodeError, OSError):
-            pass
+    # Get inventory uploaded_at (z indexu v pameti)
+    inv_data = plan_index.inventory()
+    inventory_uploaded_at = inv_data.get("uploaded_at") if inv_data else None
 
     return TEMPLATES.TemplateResponse(request, "index.html", {
         "plans": plans,
@@ -422,41 +573,47 @@ def index(request: Request):
     })
 
 @app.get("/overview")
-def overview(request: Request):
-    items = get_aggregated_items()
-    if items:
-        # Re-sort using same logic if not already sorted in get_aggregated_items (it wasn't)
-        # get_aggregated_items sorted by days, but we want date asc?
-        # Actually line 170 of app.py sorted by days_to_delivery ascending.
-        # User might prefer that. Let's stick to what was there.
-        pass
+def overview(request: Request, show_archived: bool = False):
+    if _ensure_data_ready():
+        return _data_error_page(request)
 
-    notifications = get_notifications()
+    items = get_aggregated_items()
+    active_items = items
+    if show_archived:
+        items = items + get_aggregated_items(
+            plan_entries=plan_index.archived_plans(),
+            archived=True,
+        )
+        items.sort(key=lambda x: (x["days_to_delivery"] is None, x["days_to_delivery"]))
+    # get_aggregated_items uz radky serazuje podle days_to_delivery vzestupne.
+    notifications = get_notifications(active_items)  # archiv nema generovat upozorneni
 
     return TEMPLATES.TemplateResponse(request, "overview.html", {
         "items": items,
         "format_num": format_cz_num,
-        "notifications": notifications
+        "notifications": notifications,
+        "show_archived": show_archived,
     })
 
 @app.post("/upload")
 def upload_pdf(request: Request, file: UploadFile = File(...)):
+    _api_guard()
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     temp_pdf = BASE_DIR / f"tmp_{ts}.pdf"
-    
+
     with temp_pdf.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     try:
         payload = extract_lieferplan(temp_pdf)
-        sa = payload.get("scheduling_agreement_no") or "Unknown"
-        rn = payload.get("release_nr") or "Unknown"
-        
-        plan_id = f"{get_safe_id(sa)}_AN_{get_safe_id(rn)}"
-        
-        # --- Duplicate detection ---
+        plan_id = get_plan_id(payload)
+
+        # --- Duplicate detection (z indexu v pameti, bez skenovani disku) ---
         dirs = get_plan_dirs(plan_id)
-        plan_already_exists = dirs["extracted"].exists() and any(dirs["extracted"].glob("*.json"))
+        plan_already_exists = (
+            plan_index.get(plan_id) is not None
+            or plan_index.has_archived_plan(plan_id)
+        )
         if plan_already_exists:
             # Save temp PDF under a staging name so confirm-overwrite can reuse it
             staging_pdf = BASE_DIR / f"staging_{ts}.pdf"
@@ -480,12 +637,16 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
 
         shutil.move(temp_pdf, dirs["raw"] / f"{ts}.pdf")
         extracted_file = dirs["extracted"] / f"{ts}.json"
-        
+
         with extracted_file.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+        plan_index.upsert_plan(plan_id, payload, ts)
+        archived = archive_eligible_plans()
+
         from fastapi.responses import JSONResponse
-        return JSONResponse({"exists": False, "redirect": f"/plan/{plan_id}/{ts}"})
+        redirect = "/overview" if plan_id in archived else f"/plan/{plan_id}/{ts}"
+        return JSONResponse({"exists": False, "redirect": redirect})
     except Exception as e:
         if temp_pdf.exists(): temp_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
@@ -498,6 +659,7 @@ class OverwriteRequest(BaseModel):
 @app.post("/upload/confirm-overwrite")
 def confirm_overwrite(req: OverwriteRequest):
     """Called when user confirms they want to overwrite an existing plan."""
+    _api_guard()
     # Security: resolve and validate staging path is within BASE_DIR
     # and matches the server-generated staging_<ts>.pdf pattern.
     try:
@@ -516,10 +678,21 @@ def confirm_overwrite(req: OverwriteRequest):
 
     try:
         payload = extract_lieferplan(staging_pdf)
+        extracted_plan_id = get_plan_id(payload)
+        if extracted_plan_id != safe_plan_id:
+            raise HTTPException(
+                status_code=400,
+                detail="The staged PDF does not match the confirmed plan.",
+            )
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         now_dt = datetime.now(timezone.utc)
         payload["uploaded_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         payload["ts_key"] = ts
+
+        # A same-ID plan may already live in the archive. The user has now
+        # explicitly confirmed overwrite, so restore its complete history to
+        # the active tree before adding the new version.
+        plan_index.restore_archived_plan(safe_plan_id)
 
         dirs = get_plan_dirs(safe_plan_id)
         for d in dirs.values():
@@ -530,17 +703,26 @@ def confirm_overwrite(req: OverwriteRequest):
         with extracted_file.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+        plan_index.upsert_plan(safe_plan_id, payload, ts)
+        archived = archive_eligible_plans()
+
         from fastapi.responses import JSONResponse
-        return JSONResponse({"redirect": f"/plan/{safe_plan_id}/{ts}"})
+        redirect = "/overview" if safe_plan_id in archived else f"/plan/{safe_plan_id}/{ts}"
+        return JSONResponse({"redirect": redirect})
+    except HTTPException:
+        if staging_pdf.exists():
+            staging_pdf.unlink()
+        raise
     except Exception as e:
         if staging_pdf.exists(): staging_pdf.unlink()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload-inventory")
 def upload_inventory(file: UploadFile = File(...)):
+    _api_guard()
     if not file.filename.endswith('.xlsx'):
         raise HTTPException(status_code=400, detail="Soubor musí být ve formátu .xlsx")
-        
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     temp_xlsx = BASE_DIR / f"tmp_inv_{ts}.xlsx"
     
@@ -561,6 +743,8 @@ def upload_inventory(file: UploadFile = File(...)):
         with inventory_file.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+        plan_index.set_inventory(payload)
+
         # Cleanup temp file
         if temp_xlsx.exists():
             temp_xlsx.unlink()
@@ -573,36 +757,66 @@ def upload_inventory(file: UploadFile = File(...)):
 
 @app.get("/plan/{plan_id}/latest")
 def latest_plan(request: Request, plan_id: str):
-    dirs = get_plan_dirs(plan_id)
-    files = sorted(dirs["extracted"].glob("*.json"))
-    if not files:
+    if _ensure_data_ready():
+        return _data_error_page(request)
+    entry = plan_index.get(plan_id)
+    if not entry:
         raise HTTPException(status_code=404, detail="No extractions found for this plan.")
-    return view_plan(request, plan_id, files[-1].stem)
+    return view_plan(request, plan_id, entry["latest_ts"])
 
 @app.get("/plan/{plan_id}/download")
 def download(plan_id: str):
-    dirs = get_plan_dirs(plan_id)
-    files = sorted(dirs["extracted"].glob("*.json"))
-    if not files:
+    _api_guard()
+    entry = plan_index.get(plan_id)
+    if not entry:
         raise HTTPException(status_code=404, detail="No extracted data found for this plan.")
-    
-    ts = files[-1].stem
-    raw_pdf_path = dirs["raw"] / f"{ts}.pdf"
-    
+
+    ts = entry["latest_ts"]
+    raw_pdf_path = get_plan_dirs(plan_id)["raw"] / f"{ts}.pdf"
+
     if not raw_pdf_path.exists():
         raise HTTPException(status_code=404, detail="Original PDF not found for this plan.")
-        
+
     return FileResponse(str(raw_pdf_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
+
+
+@app.get("/archive/plan/{plan_id}/download")
+def download_archived(plan_id: str):
+    _api_guard()
+    entry = plan_index.get_archived(plan_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Archived plan not found.")
+    ts = entry["latest_ts"]
+    raw_pdf_path = get_plan_dirs(plan_id, archived=True)["raw"] / f"{ts}.pdf"
+    if not raw_pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Original PDF not found.")
+    return FileResponse(str(raw_pdf_path), filename=f"{plan_id}.pdf", media_type="application/pdf")
+
 
 @app.get("/plan/{plan_id}/{ts}")
 def view_plan(request: Request, plan_id: str, ts: str):
-    dirs = get_plan_dirs(plan_id)
-    target = dirs["extracted"] / f"{ts}.json"
-    
-    if not target.exists():
-        raise HTTPException(status_code=404, detail=f"Version {ts} not found")
+    return _render_plan(request, plan_id, ts, archived=False)
 
-    payload = _load_json(target)
+
+@app.get("/archive/plan/{plan_id}/{ts}")
+def view_archived_plan(request: Request, plan_id: str, ts: str):
+    return _render_plan(request, plan_id, ts, archived=True)
+
+
+def _render_plan(request: Request, plan_id: str, ts: str, archived: bool):
+    if _ensure_data_ready():
+        return _data_error_page(request)
+
+    # Nejcastejsi pripad (nejnovejsi verze) obslouzime z indexu v pameti bez
+    # diskoveho I/O; starsi verzi nacteme primo ze souboru (jedno cteni).
+    entry = plan_index.get_archived(plan_id) if archived else plan_index.get(plan_id)
+    if entry and entry["latest_ts"] == ts:
+        payload = copy.deepcopy(entry["data"])  # kopie, at nemutujeme cache
+    else:
+        target = get_plan_dirs(plan_id, archived=archived)["extracted"] / f"{ts}.json"
+        if not target.exists():
+            raise HTTPException(status_code=404, detail=f"Version {ts} not found")
+        payload = _load_json(target)
     
     # Calculate lead times and status flags for UI
     today = datetime.now().date()
@@ -726,38 +940,36 @@ def view_plan(request: Request, plan_id: str, ts: str):
     
     # Get history for changelog
     sa_no = payload.get("scheduling_agreement_no", "")
-    history = get_history(sa_no)
+    history = get_history(sa_no, include_archived=archived)
 
-    # Load Inventory Data
+    # Load Inventory Data (z indexu v pameti, bez diskoveho I/O)
     nadvyroba_qty = None
     inventory_uploaded_at = None
-    inventory_path = DATA_DIR / "inventory.json"
-    if inventory_path.exists():
+    inv_data = plan_index.inventory()
+    if inv_data:
         try:
-            with open(inventory_path, "r", encoding="utf-8") as f:
-                inv_data = json.load(f)
-                inventory_uploaded_at = inv_data.get("uploaded_at")
-                items = inv_data.get("items", {})
-                
-                # Match material_no. Lieferplan has trailing " /" which we must clear.
-                # Also remove ALL spaces from both sides to handle inconsistent spacing (e.g. French plans)
-                def clean_code(code: str) -> str:
-                    c = str(code).strip()
-                    if c.endswith('/'):
-                        c = c[:-1]
-                    c = c.replace(" ", "")
-                    # For Mercedes-style codes (A + 10 digits), ignore varying color/variant suffixes
-                    if c.startswith('A') and len(c) >= 11:
-                        return c[:11]
-                    return c
+            inventory_uploaded_at = inv_data.get("uploaded_at")
+            items = inv_data.get("items", {})
 
-                plan_mat_clean = clean_code(mat_no)
-                
-                # Search through the inventory keys, cleaning them the same way
-                for inv_key, qty in items.items():
-                    if plan_mat_clean == clean_code(inv_key):
-                        nadvyroba_qty = qty
-                        break
+            # Match material_no. Lieferplan has trailing " /" which we must clear.
+            # Also remove ALL spaces from both sides to handle inconsistent spacing (e.g. French plans)
+            def clean_code(code: str) -> str:
+                c = str(code).strip()
+                if c.endswith('/'):
+                    c = c[:-1]
+                c = c.replace(" ", "")
+                # For Mercedes-style codes (A + 10 digits), ignore varying color/variant suffixes
+                if c.startswith('A') and len(c) >= 11:
+                    return c[:11]
+                return c
+
+            plan_mat_clean = clean_code(mat_no)
+
+            # Search through the inventory keys, cleaning them the same way
+            for inv_key, qty in items.items():
+                if plan_mat_clean == clean_code(inv_key):
+                    nadvyroba_qty = qty
+                    break
         except Exception as e:
             print(f"Error loading inventory: {e}")
 
@@ -769,7 +981,8 @@ def view_plan(request: Request, plan_id: str, ts: str):
         "format_num": format_cz_num,
         "today": datetime.now().date(),
         "nadvyroba_qty": nadvyroba_qty,
-        "inventory_uploaded_at": inventory_uploaded_at
+        "inventory_uploaded_at": inventory_uploaded_at,
+        "archived": archived,
     })
 
 class ToggleRowRequest(BaseModel):
@@ -781,9 +994,11 @@ class ToggleRowRequest(BaseModel):
 
 @app.post("/api/toggle-row")
 def toggle_row(req: ToggleRowRequest):
+    _api_guard()
     try:
         state_manager.set_state(req.sa_no, req.material, req.date, req.quantity, req.state)
-        return {"status": "ok", "new_state": req.state}
+        archived = archive_eligible_plans()
+        return {"status": "ok", "new_state": req.state, "archived": archived}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -796,15 +1011,18 @@ class NoteUpdateRequest(BaseModel):
 
 @app.get("/api/notes/{sa_no}")
 def get_notes(sa_no: str):
+    _api_guard()
     return {"notes": notes_manager.get_notes(sa_no)}
 
 @app.post("/api/notes/{sa_no}")
 def add_note(sa_no: str, req: NoteCreateRequest):
+    _api_guard()
     note = notes_manager.add_note(sa_no, req.user, req.text)
     return note
 
 @app.put("/api/notes/{sa_no}/{note_id}")
 def update_note(sa_no: str, note_id: str, req: NoteUpdateRequest):
+    _api_guard()
     note = notes_manager.update_note(sa_no, note_id, req.text)
     if not note:
         raise HTTPException(status_code=404, detail="Poznámka nebyla nalezena")
@@ -812,7 +1030,24 @@ def update_note(sa_no: str, note_id: str, req: NoteUpdateRequest):
 
 @app.delete("/api/notes/{sa_no}/{note_id}")
 def delete_note(sa_no: str, note_id: str):
+    _api_guard()
     success = notes_manager.delete_note(sa_no, note_id)
     if not success:
         raise HTTPException(status_code=404, detail="Poznámka nebyla nalezena")
     return {"status": "ok"}
+
+@app.post("/api/rebuild-index")
+def rebuild_index():
+    """Znovu projde datovou slozku a prestavi index. Pouzit, pokud nekdo
+    zasahl do sdilene slozky mimo aplikaci (rucne pridal/smazal plany)."""
+    _api_guard()
+    try:
+        plan_index.rebuild()
+        archived = archive_eligible_plans()
+        return {
+            "status": "ok",
+            "plans": len(plan_index.plans()),
+            "archived": archived,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))

@@ -31,15 +31,12 @@ class StateManager:
         # Using string representation of quantity to avoid float precision issues in keys
         return f"{date}_{float(quantity)}"
 
-    def _check_file_integrity(self):
-        """Check if file still exists. If not, clear cache."""
-        if not self.state_file.exists() and self.cache:
-            self.cache = {}
-
     def get_processed_versions(self, sa_no: str, material: str, date: str) -> list[float]:
         """Return a list of quantities that are marked as processed for this date."""
-        self._check_file_integrity()
-        # Use cache instead of loading from disk
+        # Cist jen z pameti -- zadny dotaz na disk. Cache je autoritativni
+        # (aplikace je jediny zapisovatel, jeden uzivatel naraz). Kontrola
+        # existence souboru zde by na sitovem sharu znamenala jeden sitovy
+        # dotaz na kazdy radek/datum a vratila by pomalost, kterou resime.
         state = self.cache
         sa_data = state.get(str(sa_no), {})
         mat_data = sa_data.get(str(material), {})
@@ -60,8 +57,7 @@ class StateManager:
         return sorted(processed_qtys)
 
     def get_state(self, sa_no: str, material: str, date: str, quantity: float) -> bool:
-        self._check_file_integrity()
-        # Use cache instead of loading from disk
+        # Cist jen z pameti (viz get_processed_versions). Zadne diskove I/O.
         state = self.cache
         
         sa_data = state.get(str(sa_no), {})
@@ -72,7 +68,6 @@ class StateManager:
         return row_data.get("processed", False)
 
     def set_state(self, sa_no: str, material: str, date: str, quantity: float, is_processed: bool):
-        self._check_file_integrity()
         # Update cache first
         state = self.cache
         

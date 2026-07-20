@@ -8,6 +8,7 @@ Pouziti:
 """
 import sys
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 
@@ -27,6 +28,12 @@ def main() -> int:
                 if resp.status < 500:
                     webbrowser.open(url)
                     return 0
+        except urllib.error.HTTPError as exc:
+            # HTTP 503 is the intentional "connect VPN and retry" page. The
+            # local server is ready, so show that useful response immediately.
+            if exc.code == 503:
+                webbrowser.open(url)
+                return 0
         except Exception:
             pass
         time.sleep(POLL_INTERVAL)

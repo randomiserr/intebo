@@ -186,13 +186,19 @@
   <div class="container">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
       <h1 style="font-size: 1.5rem;">Plán: {{ plan_key }}</h1>
-      <a href="/" class="nav-link">← Zpět na přehled</a>
+      <a href="{{ '/overview?show_archived=true' if archived else '/' }}" class="nav-link">← Zpět na přehled</a>
     </div>
+
+    {% if archived %}
+    <div style="padding: 0.75rem 1rem; margin-bottom: 1rem; border-radius: 6px; background: #e2e8f0; color: #475569; font-weight: 600;">
+      Archivovaný plán – pouze pro čtení
+    </div>
+    {% endif %}
 
     <div class="card" style="padding: 1rem; margin-bottom: 1.5rem;">
       <div style="display: flex; justify-content: space-between; align-items: flex-start;">
         <h2 style="margin: 0; font-size: 1.25rem;">Souhrn informací</h2>
-        <a href="/plan/{{ plan_key }}/download" class="btn btn-primary btn-sm">Stáhnout PDF</a>
+        <a href="{{ '/archive' if archived else '' }}/plan/{{ plan_key }}/download" class="btn btn-primary btn-sm">Stáhnout PDF</a>
       </div>
 
       <div style="margin-top: 1rem;">
@@ -335,7 +341,7 @@
                     data-qty="{{ line.order_quantity }}" data-group-id="ghost-group-{{ loop.index }}"
                     data-urgency="{{ 'urgent-row' if line.is_urgent else '' }}"
                     data-has-ghost="{{ 'row-has-ghost' if line.has_ghost else '' }}" {% if line.is_processed %}checked{%
-                    endif %}>
+                    endif %} {% if archived %}disabled{% endif %}>
                 </td>
           </tr>
 
@@ -375,7 +381,7 @@
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <span>Release: <strong>{{ item.release_nr }}</strong></span>
           <span style="color: var(--text-light); font-size: 0.8rem;">{{ item.uploaded_at }}</span>
-          <a href="/plan/{{ item.plan_id }}/{{ item.ts }}" style="text-decoration: none; font-weight: 500;">Otevřít
+          <a href="{{ '/archive' if item.is_archived else '' }}/plan/{{ item.plan_id }}/{{ item.ts }}" style="text-decoration: none; font-weight: 500;">Otevřít
             →</a>
         </div>
       </div>

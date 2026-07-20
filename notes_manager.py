@@ -26,16 +26,12 @@ class NotesManager:
         with self.notes_file.open("w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
-    def _check_file_integrity(self):
-        if not self.notes_file.exists() and self.cache:
-            self.cache = {}
-
     def get_notes(self, sa_no: str):
-        self._check_file_integrity()
+        # Cist jen z pameti -- zadne diskove I/O (cache je autoritativni,
+        # aplikace je jediny zapisovatel, jeden uzivatel naraz).
         return self.cache.get(str(sa_no), [])
 
     def add_note(self, sa_no: str, user: str, text: str):
-        self._check_file_integrity()
         notes = self.cache.get(str(sa_no), [])
         note_id = str(uuid.uuid4())
         new_note = {
@@ -50,7 +46,6 @@ class NotesManager:
         return new_note
 
     def update_note(self, sa_no: str, note_id: str, text: str):
-        self._check_file_integrity()
         notes = self.cache.get(str(sa_no), [])
         for note in notes:
             if note["id"] == note_id:
@@ -61,7 +56,6 @@ class NotesManager:
         return None
 
     def delete_note(self, sa_no: str, note_id: str):
-        self._check_file_integrity()
         notes = self.cache.get(str(sa_no), [])
         original_len = len(notes)
         notes = [n for n in notes if n["id"] != note_id]

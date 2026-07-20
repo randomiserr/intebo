@@ -70,6 +70,20 @@
             color: #9ca3af !important;
         }
 
+        .archived-row {
+            background-color: #f1f5f9 !important;
+        }
+
+        .archive-badge {
+            display: inline-block;
+            padding: 0.15rem 0.45rem;
+            border-radius: 4px;
+            background: #64748b;
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
         /* Ensure processed row overrides specific urgency classes */
         .processed-row.urgency-critical,
         .processed-row.urgency-warning,
@@ -339,6 +353,8 @@
             display: flex;
             align-items: center;
             justify-content: flex-end;
+            gap: 1.5rem;
+            flex-wrap: wrap;
             margin-bottom: 1rem;
         }
 
@@ -498,7 +514,15 @@
 
         <div class="toggle-container">
             <label class="toggle-label">
-                Zobrazit pouze nezpracované plány
+                Archivovan&eacute; pl&aacute;ny
+                <div class="switch">
+                    <input type="checkbox" id="toggleArchived" {% if show_archived %}checked{% endif %}
+                        onchange="window.location.href = this.checked ? '/overview?show_archived=true' : '/overview'">
+                    <span class="slider"></span>
+                </div>
+            </label>
+            <label class="toggle-label">
+                Pouze nezpracované plány
                 <div class="switch">
                     <input type="checkbox" id="toggleUnprocessed" onchange="applyFilters()">
                     <span class="slider"></span>
@@ -628,10 +652,10 @@
                     <!-- Main Row -->
                     <tr id="row-{{ loop.index }}"
                         onclick="if(!event.target.closest('a') && !event.target.closest('input')) toggleGhost(this.querySelector('.ghost-toggle') || this, 'ghost-group-{{ loop.index }}')"
-                        class="item-row {{ '' if item.is_processed else ('row-has-ghost' if item.has_ghost else 'urgency-' + item.urgency if item.days_to_delivery is not none and item.days_to_delivery >= 0 else '') }} {{ 'processed-row' if item.is_processed else '' }}">
+                        class="item-row {{ '' if item.is_processed else ('row-has-ghost' if item.has_ghost else 'urgency-' + item.urgency if item.days_to_delivery is not none and item.days_to_delivery >= 0 else '') }} {{ 'processed-row' if item.is_processed else '' }} {{ 'archived-row' if item.is_archived else '' }}">
                         {% set outer_loop = loop %}
                         <td style="padding: 0.6rem;">
-                            <a href="/plan/{{ item.plan_id }}/{{ item.ts }}" class="plan-link">
+                            <a href="{{ '/archive' if item.is_archived else '' }}/plan/{{ item.plan_id }}/{{ item.ts }}" class="plan-link">
                                 {{ item.sa_no }}
                             </a>
                             {% if item.ghosts %}
@@ -666,6 +690,9 @@
                             </td>
                             <td style="padding: 0.6rem;">
                                 <!-- New Detail Column for warnings -->
+                                {% if item.is_archived %}
+                                <span class="archive-badge">Archiv</span>
+                                {% endif %}
                                 {% if item.has_ghost %}
                                 <span class="ghost-badge {{ 'processed-badge' if item.is_processed else '' }}"
                                     style="margin-left: 0;">Změna množství, ale již ve výrobě</span>
@@ -701,7 +728,7 @@
                                         data-qty="{{ item.quantity }}" data-group-id="ghost-group-{{ loop.index }}"
                                         data-urgency="{{ 'urgency-' + item.urgency if item.days_to_delivery is not none and item.days_to_delivery >= 0 else '' }}"
                                         data-has-ghost="{{ 'row-has-ghost' if item.has_ghost else '' }}" {% if
-                                        item.is_processed %}checked{% endif %}>
+                                        item.is_processed %}checked{% endif %} {% if item.is_archived %}disabled{% endif %}>
                                 </td>
                     </tr>
 
@@ -751,7 +778,13 @@
                     document.querySelectorAll('.filter-dropdown').forEach(d => d.classList.remove('show'));
                 }
             });
+            // Browsers may restore checkbox state during a reload. Apply that
+            // restored state immediately instead of waiting for a change event.
+            applyFilters();
         });
+
+        // Also covers restoration from the browser back/forward cache.
+        window.addEventListener('pageshow', applyFilters);
 
         function populateFilterOptions(colIndex) {
             const rows = document.querySelectorAll('.item-row');
