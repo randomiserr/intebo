@@ -176,20 +176,31 @@ def archive_eligible_plans(manager=None, today=None) -> List[str]:
             str(data.get("scheduling_agreement_no", "")).strip(),
             str(data.get("material_no", "")).strip(),
         )
+        release_raw = str(data.get("release_nr", "")).strip()
         try:
-            release = int(str(data.get("release_nr", "")).strip())
+            release = int(release_raw)
+            release_valid = release >= 0
         except (TypeError, ValueError):
             release = -1
+            release_valid = False
         rank = (release, str(pentry.get("latest_ts", "")))
-        group = grouped.setdefault(key, {"entries": [], "best": None, "rank": None})
+        group = grouped.setdefault(
+            key,
+            {"entries": [], "best": None, "rank": None, "valid_releases": True},
+        )
         group["entries"].append(pentry)
+        group["valid_releases"] = group["valid_releases"] and release_valid
         if group["rank"] is None or rank > group["rank"]:
             group["best"] = pentry
             group["rank"] = rank
 
     plan_ids = []
     for group in grouped.values():
-        if should_archive_plan(group["best"], today=today, manager=manager):
+        # If any release is malformed we cannot safely establish which one is
+        # newest, so keep the whole group active instead of risking data loss.
+        if group["valid_releases"] and should_archive_plan(
+            group["best"], today=today, manager=manager
+        ):
             plan_ids.extend(entry["plan_key"] for entry in group["entries"])
     return plan_index.archive_plans(plan_ids)
 
@@ -595,7 +606,10 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
 
         # --- Duplicate detection (z indexu v pameti, bez skenovani disku) ---
         dirs = get_plan_dirs(plan_id)
-        plan_already_exists = plan_index.get(plan_id) is not None
+        plan_already_exists = (
+            plan_index.get(plan_id) is not None
+            or plan_index.has_archived_plan(plan_id)
+        )
         if plan_already_exists:
             # Save temp PDF under a staging name so confirm-overwrite can reuse it
             staging_pdf = BASE_DIR / f"staging_{ts}.pdf"
@@ -664,6 +678,11 @@ def confirm_overwrite(req: OverwriteRequest):
         now_dt = datetime.now(timezone.utc)
         payload["uploaded_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         payload["ts_key"] = ts
+
+        # A same-ID plan may already live in the archive. The user has now
+        # explicitly confirmed overwrite, so restore its complete history to
+        # the active tree before adding the new version.
+        plan_index.restore_archived_plan(safe_plan_id)
 
         dirs = get_plan_dirs(safe_plan_id)
         for d in dirs.values():

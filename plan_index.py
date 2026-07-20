@@ -98,6 +98,11 @@ class PlanIndex:
         """Plny sken stromu plans/ -> index v pameti + na disku. Rezerva pro
         pripad, ze se do slozky zapsalo mimo aplikaci."""
         with self._write_lock:
+            # A manual filesystem repair may also have changed archive/plans.
+            # Force the next explicit archive view to rescan it lazily.
+            self._atomic_write_json(self.archive_index_file, {"schema": 0})
+            with self._lock:
+                self._archived = None
             plans = self._scan_plans()
             with self._lock:
                 self._plans = plans
@@ -140,6 +145,10 @@ class PlanIndex:
         self.archived_plans()
         with self._lock:
             return (self._archived or {}).get(plan_id)
+
+    def has_archived_plan(self, plan_id: str) -> bool:
+        """Check one archive path without loading the full archive index."""
+        return (self.archive_dir / plan_id).is_dir()
 
     def inventory(self) -> Optional[dict]:
         self.ensure_loaded()
@@ -211,6 +220,7 @@ class PlanIndex:
             self.archive_dir.mkdir(parents=True, exist_ok=True)
             archived: List[str] = []
             moved: List[str] = []
+            displaced: List[tuple[Path, Path]] = []
 
             try:
                 for plan_id in entries:
@@ -218,10 +228,14 @@ class PlanIndex:
                     destination = self.archive_dir / plan_id
 
                     if source.exists():
-                        # Never merge/overwrite an existing archive directory.
-                        # Keeping the active plan is safer than losing history.
+                        # A confirmed re-upload may reuse an archived plan ID.
+                        # Preserve the previous archive under a unique sibling
+                        # before promoting the newly completed version to the
+                        # canonical archive path.
                         if destination.exists():
-                            continue
+                            backup = self._unique_archive_path(plan_id)
+                            os.replace(destination, backup)
+                            displaced.append((destination, backup))
                         os.replace(source, destination)
                         moved.append(plan_id)
                         archived.append(plan_id)
@@ -246,6 +260,9 @@ class PlanIndex:
                             self.archive_dir / plan_id,
                             self.plans_dir / plan_id,
                         )
+                    for destination, backup in reversed(displaced):
+                        if backup.exists() and not destination.exists():
+                            os.replace(backup, destination)
                     with self._lock:
                         self._plans.update(entries)
                     raise
@@ -256,9 +273,50 @@ class PlanIndex:
                     source = self.plans_dir / plan_id
                     if destination.exists() and not source.exists():
                         os.replace(destination, source)
+                for destination, backup in reversed(displaced):
+                    if backup.exists() and not destination.exists():
+                        os.replace(backup, destination)
                 raise
 
             return archived
+
+    def restore_archived_plan(self, plan_id: str) -> bool:
+        """Restore an archived plan before a confirmed same-ID overwrite."""
+        entry = self.get_archived(plan_id)
+        if entry is None:
+            return False
+
+        with self._write_lock:
+            source = self.archive_dir / plan_id
+            destination = self.plans_dir / plan_id
+            if not source.exists():
+                return False
+            if destination.exists():
+                raise FileExistsError(f"Active plan directory already exists: {plan_id}")
+
+            # The archive directory changes, so make its lazy cache rebuild on
+            # demand. Do this before the move; failure leaves data untouched.
+            self._atomic_write_json(self.archive_index_file, {"schema": 0})
+            with self._lock:
+                self._archived = None
+
+            self.plans_dir.mkdir(parents=True, exist_ok=True)
+            os.replace(source, destination)
+            try:
+                with self._lock:
+                    previous_active = self._plans.get(plan_id)
+                    self._plans[plan_id] = entry
+                    snapshot = dict(self._plans)
+                self._persist(snapshot)
+            except Exception:
+                os.replace(destination, source)
+                with self._lock:
+                    if previous_active is None:
+                        self._plans.pop(plan_id, None)
+                    else:
+                        self._plans[plan_id] = previous_active
+                raise
+            return True
 
     def set_inventory(self, inv: dict) -> None:
         self.ensure_loaded()
@@ -274,6 +332,15 @@ class PlanIndex:
     # ------------------------------------------------------------------ #
     def _scan_plans(self) -> Dict[str, dict]:
         return self._scan_plans_dir(self.plans_dir)
+
+    def _unique_archive_path(self, plan_id: str) -> Path:
+        """Return a non-existing sibling path for a displaced archive."""
+        suffix = 1
+        while True:
+            candidate = self.archive_dir / f"{plan_id}__previous_{suffix}"
+            if not candidate.exists():
+                return candidate
+            suffix += 1
 
     def _scan_plans_dir(self, plans_dir: Path) -> Dict[str, dict]:
         plans: Dict[str, dict] = {}
